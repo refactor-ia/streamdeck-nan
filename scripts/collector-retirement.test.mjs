@@ -104,6 +104,7 @@ test("root documentation names active boundaries without retired packages", asyn
     assert.match(contributing, new RegExp(boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(security, new RegExp(boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.doesNotMatch(security, /`deploy\//);
   assert.match(security, /CLI child environments exclude parent token and API-key variables/);
   assert.match(security, /same-user filesystem residual/);
 });
