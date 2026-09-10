@@ -12481,6 +12481,13 @@ const defaultWatchScheduler = {
 };
 
 const IMPORT_CHROME_SESSION_KIND = "nan.importChromeSession.v1";
+/** Accepts only the explicit, payload-free Chrome session import request. */
+function isImportChromeSessionMessage(payload) {
+    return typeof payload === "object" && payload !== null
+        && Object.keys(payload).length === 1
+        && payload.kind === IMPORT_CHROME_SESSION_KIND;
+}
+
 let NanDemoUsage = (() => {
     let _classDecorators = [action({ UUID: "com.refactor-ia.nan.nan-demo" })];
     let _classDescriptor;
@@ -12640,11 +12647,6 @@ let NanDemoUsage = (() => {
     });
     return _classThis;
 })();
-function isImportChromeSessionMessage(payload) {
-    return typeof payload === "object" && payload !== null
-        && Object.keys(payload).length === 1
-        && payload.kind === IMPORT_CHROME_SESSION_KIND;
-}
 
 const COLORS$1 = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" };
 /** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
@@ -12717,7 +12719,7 @@ function monthly(model, stale) {
 }
 function unavailable(error) {
     const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
-    const secondary = status === "IMPORT" ? "USE NaN DIAL" : "DASHBOARD OFFLINE";
+    const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
     return { label: ["NaN DASHBOARD"], primary: "--", secondary, tertiary: "", status, accent: status === "ERROR" ? COLORS$1.rose : COLORS$1.gold, gauge: 0 };
 }
 function period(model) {
@@ -12805,6 +12807,10 @@ let NanModelUsage = (() => {
         async onSendToPlugin(ev) {
             if (!ev.action.isKey() || !this.isCurrent(ev.action))
                 return;
+            if (isImportChromeSessionMessage(ev.payload)) {
+                await this.dashboard.importChromeSession();
+                return;
+            }
             if (isModelsRequest(ev.payload)) {
                 const usage = await this.dashboard.getUsage({ source: "dashboard" });
                 if (this.isCurrent(ev.action))
@@ -12926,6 +12932,11 @@ class NanMetricsUsage extends SingletonAction {
             return;
         // A keypress remains an explicit fresh read even while the shared visibility watch is active.
         await this.dashboard.getUsage({ source: "dashboard" });
+    }
+    async onSendToPlugin(ev) {
+        if (!ev.action.isKey() || !this.isCurrent(ev.action) || !isImportChromeSessionMessage(ev.payload))
+            return;
+        await this.dashboard.importChromeSession();
     }
     onWillDisappear(ev) {
         const entry = this.visible.get(ev.action.id);

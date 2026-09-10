@@ -5,7 +5,7 @@ import test from "node:test";
 test("README documents explicit Chrome dashboard import and retained provider security boundaries", () => {
   const readme = readFileSync("README.md", "utf8");
 
-  assert.match(readme, /Select that dial in the app\. In its configuration panel, click \*\*Import session from Chrome\*\*\./);
+  assert.match(readme, /Select that action in the app\. In its configuration panel, click \*\*Import session from Chrome\*\*\./);
   assert.match(readme, /never reads Chrome or Chrome Safe Storage during appearance, refresh, rotation,\s+settings, or wake handling/);
   assert.match(readme, /Dashboard session\s+cache data is stored through the dedicated local session store, never in Stream Deck\s+settings/);
   assert.match(readme, /does not expose cookies, provider URLs, or\s+Safe Storage secrets in settings, feedback, or logs/);

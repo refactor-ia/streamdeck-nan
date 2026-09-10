@@ -91,7 +91,7 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
 
 function unavailable(error: NanDashboardUsage["error"]): Display {
   const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
-  const secondary = status === "IMPORT" ? "USE NaN DIAL" : "DASHBOARD OFFLINE";
+  const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
   return { label: ["NaN DASHBOARD"], primary: "--", secondary, tertiary: "", status, accent: status === "ERROR" ? COLORS.rose : COLORS.gold, gauge: 0 };
 }
 

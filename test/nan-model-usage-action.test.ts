@@ -72,6 +72,36 @@ test("initial model request awaits the shared dashboard read and unions exact mo
   }]);
 });
 
+test("model key imports only exact messages from its current visible Key and redraws shared results", async () => {
+  const dashboard = new ImportDashboard();
+  const images: string[] = [];
+  const current = fakeKey("current", images);
+  const stale = fakeKey("stale", images);
+  const nonKey = { ...fakeKey("dial", images), isKey: () => false };
+  const { NanModelUsage } = await loadNanModelUsage();
+  const subject = new NanModelUsage(dashboard);
+
+  await subject.onWillAppear({ action: current, payload: { settings: {} } } as never);
+  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1", extra: true } } as never);
+  await subject.onSendToPlugin({ action: current, payload: { kind: "unrelated" } } as never);
+  await subject.onSendToPlugin({ action: nonKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  await subject.onSendToPlugin({ action: stale, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 0);
+
+  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 1);
+  assert.equal(images.length, 2, "the shared ready notification redraws the current key");
+
+  dashboard.result = { source: "dashboard", stale: false, error: "import-unavailable" };
+  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 2);
+  assert.equal(images.length, 3, "the shared failure notification redraws the current key");
+
+  subject.onWillDisappear({ action: current } as never);
+  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 2);
+});
+
 test("initial model request suppresses a payload after its inspector and appearance become stale", async (t) => {
   const usage = deferred<NanDashboardUsage>();
   const dashboard = new FakeDashboard(Promise.resolve(emptyUsage), usage.promise);
@@ -111,8 +141,26 @@ class FakeDashboard {
   }
 }
 
-function fakeKey(id: string): KeyAction<Record<string, never>> {
-  return { id, isKey: () => true, setImage: async () => undefined } as KeyAction<Record<string, never>>;
+class ImportDashboard {
+  imports = 0;
+  result: NanDashboardUsage = quotaUsage;
+  private readonly listeners = new Set<(usage: NanDashboardUsage) => void>();
+
+  subscribe(listener: (usage: NanDashboardUsage) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  async getUsage(): Promise<NanDashboardUsage> { return emptyUsage; }
+  getCachedUsage(): NanDashboardUsage { return emptyUsage; }
+  async importChromeSession(): Promise<{ state: "ready" | "import-unavailable"; quota?: NanDashboardUsage["quota"] }> {
+    this.imports += 1;
+    for (const listener of this.listeners) listener(this.result);
+    return this.result.error === "import-unavailable" ? { state: "import-unavailable" } : { state: "ready", quota: this.result.quota };
+  }
+}
+
+function fakeKey(id: string, images?: string[]): KeyAction<Record<string, never>> {
+  return { id, isKey: () => true, setImage: async (image: string) => { images?.push(image); } } as KeyAction<Record<string, never>>;
 }
 
 function replaceUi(t: test.TestContext, ui: object): void {

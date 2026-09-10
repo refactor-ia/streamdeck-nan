@@ -3,12 +3,14 @@ import {
   type DidReceiveSettingsEvent,
   type KeyAction,
   type KeyDownEvent,
+  type SendToPluginEvent,
   SingletonAction,
   type WillAppearEvent,
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { renderNanMetricsUsageImage, type NanMetricsPeriod } from "./nan-metrics-feedback.js";
+import { isImportChromeSessionMessage } from "./nan-chrome-import-message.js";
 
 type NanMetricsSettings = Record<string, never>;
 type VisibleMetricsAction = { readonly action: KeyAction<NanMetricsSettings>; disposeWatch: () => void };
@@ -43,6 +45,11 @@ abstract class NanMetricsUsage extends SingletonAction<NanMetricsSettings> {
     if (!ev.action.isKey() || !this.isCurrent(ev.action)) return;
     // A keypress remains an explicit fresh read even while the shared visibility watch is active.
     await this.dashboard.getUsage({ source: "dashboard" });
+  }
+
+  override async onSendToPlugin(ev: SendToPluginEvent<any, NanMetricsSettings>): Promise<void> {
+    if (!ev.action.isKey() || !this.isCurrent(ev.action) || !isImportChromeSessionMessage(ev.payload)) return;
+    await this.dashboard.importChromeSession();
   }
 
   override onWillDisappear(ev: WillDisappearEvent<NanMetricsSettings>): void {

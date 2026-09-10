@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { isImportChromeSessionMessage } from "../src/actions/nan-chrome-import-message.js";
 
 const actionSource = readFileSync("src/actions/nan-demo-usage.ts", "utf8");
+const importMessageSource = readFileSync("src/actions/nan-chrome-import-message.ts", "utf8");
 
 test("NaN runtime constructs only the dashboard controller and keeps the dial UUID", () => {
   const plugin = readFileSync("src/plugin.ts", "utf8");
@@ -26,9 +28,19 @@ test("appearance, refresh, rotation, settings, and wake use cached/dashboard rea
   assert.match(actionSource, /onDidReceiveSettings[\s\S]*getCachedUsage/);
   assert.match(actionSource, /onDialRotate[\s\S]*getCachedUsage/);
   assert.match(actionSource, /updateDisplay[\s\S]*this\.dashboard\.getUsage/);
-  assert.match(actionSource, /Object\.keys\(payload\)\.length === 1/);
+  assert.match(actionSource, /import \{ isImportChromeSessionMessage \} from "\.\/nan-chrome-import-message\.js"/);
   const beforeSend = actionSource.slice(0, actionSource.indexOf("onSendToPlugin"));
   assert.doesNotMatch(beforeSend, /importChromeSession\(/);
   const sendHandler = actionSource.slice(actionSource.indexOf("onSendToPlugin"), actionSource.indexOf("onWillDisappear"));
   assert.match(sendHandler, /isImportChromeSessionMessage[\s\S]*this\.dashboard\.importChromeSession\(\)/);
+});
+
+test("shared Chrome-import predicate accepts only the one-field protocol payload", () => {
+  assert.match(importMessageSource, /export function isImportChromeSessionMessage/);
+  assert.match(importMessageSource, /Object\.keys\(payload\)\.length === 1/);
+  assert.match(importMessageSource, /kind === IMPORT_CHROME_SESSION_KIND/);
+  assert.equal(isImportChromeSessionMessage({ kind: "nan.importChromeSession.v1" }), true);
+  for (const payload of [undefined, null, "nan.importChromeSession.v1", {}, { kind: "other" }, { kind: "nan.importChromeSession.v1", extra: true }]) {
+    assert.equal(isImportChromeSessionMessage(payload), false);
+  }
 });

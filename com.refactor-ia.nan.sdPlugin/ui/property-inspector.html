@@ -18,8 +18,11 @@
     <label>Interval (seconds) <input id="refreshInterval" type="number" min="10" max="300" value="30"></label>
     <p>Usage comes from the selected provider session. Tap the touch strip to refresh immediately.</p>
   </div>
-  <div id="nanSettings" hidden>
+  <div id="nanChromeImportSettings" hidden>
     <button id="importChromeSession" type="button">Import session from Chrome</button>
+    <p>Dashboard quota uses an imported Chrome session only after you choose Import session from Chrome.</p>
+  </div>
+  <div id="nanSettings" hidden>
     <label id="nanModelRow">Model
       <select id="nanModel">
         <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
@@ -28,12 +31,11 @@
         <option value="gemma4">Gemma 4</option>
       </select>
     </label>
-    <p>Dashboard quota uses an imported Chrome session only after you choose Import session from Chrome.</p>
   </div>
   <div id="nanModelUsageSettings" hidden>
     <label>Model <select id="nanKeyModel"></select></label>
     <button id="refreshNanModels" type="button">Refresh models</button>
-    <p>Select a model returned by cached NaN dashboard quota or month-to-date metrics. If no session is available, use the existing NaN Usage dial to import a Chrome session.</p>
+    <p>Select a model returned by cached NaN dashboard quota or month-to-date metrics.</p>
   </div>
 
   <script>
@@ -121,8 +123,10 @@
       const isNanDemo = actionUuid === NAN_DEMO_ACTION;
       const isNanModel = actionUuid === NAN_MODEL_ACTION;
       const isNanMetrics = actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
+      const isNanChromeImportAction = isNanDemo || isNanModel || isNanMetrics;
       const isNanDashboardLauncher = actionUuid === NAN_DASHBOARD_ACTION;
       document.querySelector("#refreshSettings").hidden = isNanDemo || isNanModel || isNanMetrics || isNanDashboardLauncher;
+      document.querySelector("#nanChromeImportSettings").hidden = !isNanChromeImportAction;
       document.querySelector("#nanSettings").hidden = !isNanDemo;
       document.querySelector("#nanModelUsageSettings").hidden = !isNanModel;
       document.querySelector("#autoRefresh").checked = settings.autoRefresh !== false;
@@ -157,7 +161,11 @@
       send("sendToPlugin", { context, payload: { kind: REFRESH_MODELS } });
     });
     document.querySelector("#importChromeSession").addEventListener("click", () => {
-      if (actionUuid !== NAN_DEMO_ACTION || socket?.readyState !== WebSocket.OPEN) return;
+      const isNanDemo = actionUuid === NAN_DEMO_ACTION;
+      const isNanModel = actionUuid === NAN_MODEL_ACTION;
+      const isNanMetrics = actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
+      const isNanChromeImportAction = isNanDemo || isNanModel || isNanMetrics;
+      if (!isNanChromeImportAction || socket?.readyState !== WebSocket.OPEN) return;
       send("sendToPlugin", { context, payload: { kind: "nan.importChromeSession.v1" } });
     });
   </script>

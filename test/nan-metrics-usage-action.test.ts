@@ -16,6 +16,7 @@ registerHooks({
 type MetricsAction = {
   onWillAppear(event: unknown): Promise<void>;
   onKeyDown(event: unknown): Promise<void>;
+  onSendToPlugin(event: unknown): Promise<void>;
   onWillDisappear(event: unknown): void;
 };
 
@@ -36,6 +37,34 @@ const cached: NanDashboardUsage = {
     monthToDate: { totalTokens: 2, byModel: [] }, allTime: { totalTokens: 3, byModel: [] },
   },
 };
+
+test("total and monthly keypad actions import only exact messages from current visible Keys", async () => {
+  const dashboard = new FakeDashboard();
+  const images: string[] = [];
+  const totalKey = fakeKey("total", images);
+  const monthlyKey = fakeKey("monthly", images);
+  const staleKey = fakeKey("stale", images);
+  const nonKey = { ...fakeKey("dial", images), isKey: () => false };
+  const { NanTotalTokensUsage, NanMonthlyTokensUsage } = await loadActions();
+  const total = new NanTotalTokensUsage(dashboard);
+  const monthly = new NanMonthlyTokensUsage(dashboard);
+
+  await total.onWillAppear({ action: totalKey, payload: { settings: {} } } as never);
+  await monthly.onWillAppear({ action: monthlyKey, payload: { settings: {} } } as never);
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1", extra: true } } as never);
+  await total.onSendToPlugin({ action: staleKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  await monthly.onSendToPlugin({ action: nonKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 0);
+
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  await monthly.onSendToPlugin({ action: monthlyKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 2);
+  assert.equal(images.length, 6, "each shared success redraws both visible keys");
+
+  total.onWillDisappear({ action: totalKey } as never);
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
+  assert.equal(dashboard.imports, 2);
+});
 
 test("total and monthly keypad actions share watch-driven snapshots and dispose only their own appearance", async () => {
   const dashboard = new FakeDashboard();
@@ -69,6 +98,7 @@ class FakeDashboard {
   watches = 0;
   disposals = 0;
   reads = 0;
+  imports = 0;
   getCachedCalls = 0;
   private readonly listeners = new Set<(usage: NanDashboardUsage) => void>();
 
@@ -83,6 +113,11 @@ class FakeDashboard {
   }
   getCachedUsage(): NanDashboardUsage { this.getCachedCalls += 1; return cached; }
   async getUsage(): Promise<NanDashboardUsage> { this.reads += 1; return cached; }
+  async importChromeSession(): Promise<{ state: "ready" }> {
+    this.imports += 1;
+    await this.publish(cached);
+    return { state: "ready" };
+  }
   async publish(usage: NanDashboardUsage): Promise<void> {
     for (const listener of this.listeners) listener(usage);
     await Promise.resolve();

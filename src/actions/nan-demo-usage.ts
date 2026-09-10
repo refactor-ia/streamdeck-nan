@@ -12,13 +12,12 @@ import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js"
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { cycleNanLiveModel, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
 import { renderNanDashboardFeedback, renderNanImportProgress } from "./usage-feedback.js";
+import { isImportChromeSessionMessage } from "./nan-chrome-import-message.js";
 
 export type NanDemoSettings = RefreshSettings & Partial<{
   model: string;
   source: "dashboard" | "legacy" | string;
 }>;
-
-const IMPORT_CHROME_SESSION_KIND = "nan.importChromeSession.v1";
 
 @action({ UUID: "com.refactor-ia.nan.nan-demo" })
 export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
@@ -180,10 +179,4 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   private writeSettings(action: DialAction<NanDemoSettings>, settings: NanDemoSettings): Promise<void> {
     return this.settingsWrites.write(action.id, settings, (latest) => action.setSettings(latest), this.appearanceGuard(action));
   }
-}
-
-export function isImportChromeSessionMessage(payload: unknown): payload is { readonly kind: typeof IMPORT_CHROME_SESSION_KIND } {
-  return typeof payload === "object" && payload !== null
-    && Object.keys(payload).length === 1
-    && (payload as { kind?: unknown }).kind === IMPORT_CHROME_SESSION_KIND;
 }

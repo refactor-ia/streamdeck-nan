@@ -19,9 +19,13 @@ test("NaN encoder registration uses the migrated UUID and dashboard-only constru
   assert.match(plugin, /registerAction\(nanAction\)/);
 });
 
-test("NaN dial inspector offers dashboard import without legacy source or setup copy", () => {
+test("NaN inspector exposes explicit dashboard import for the dial and all three data-display keys only", () => {
+  assert.match(inspector, /id="nanChromeImportSettings"/);
   assert.match(inspector, /id="importChromeSession"/);
   assert.match(inspector, /Dashboard quota uses an imported Chrome session/);
+  assert.match(inspector, /const isNanChromeImportAction = isNanDemo \|\| isNanModel \|\| isNanMetrics/);
+  assert.match(inspector, /#nanChromeImportSettings"\)\.hidden = !isNanChromeImportAction/);
+  assert.match(inspector, /if \(!isNanChromeImportAction \|\| socket\?\.readyState !== WebSocket\.OPEN\) return;/);
   assert.match(inspector, /send\("sendToPlugin", \{ context, payload: \{ kind: "nan\.importChromeSession\.v1" \} \}\)/);
   assert.doesNotMatch(inspector, /nanSource|Legacy collector|collector-config|Keychain|cookie|https?:\/\//i);
 });

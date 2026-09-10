@@ -39,7 +39,10 @@ test("model key distinguishes unconfigured, missing, uncapped, stale, and import
   assert.match(uncapped, /4H WINDOW/);
   assert.doesNotMatch(uncapped, /%/);
   assert.match(renderNanModelUsageSvg({ ...ready, stale: true }, { model: "qwen3.8-flash" }), /STALE/);
-  assert.match(renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" }), /IMPORT/);
+  const importState = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" });
+  assert.match(importState, /IMPORT/);
+  assert.match(importState, /USE INSPECTOR/);
+  assert.doesNotMatch(importState, /USE NaN DIAL/);
 });
 
 test("metrics-only keys render month-to-date totals without an invented cap or percentage", () => {

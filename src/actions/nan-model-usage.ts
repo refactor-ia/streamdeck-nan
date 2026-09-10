@@ -11,6 +11,7 @@ import {
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { renderNanModelUsageImage, type NanModelSettings } from "./nan-model-feedback.js";
+import { isImportChromeSessionMessage } from "./nan-chrome-import-message.js";
 
 export type NanModelUsageSettings = NanModelSettings;
 const GET_MODELS = "nan.modelUsage.getModels.v1";
@@ -54,6 +55,10 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, NanModelUsageSettings>): Promise<void> {
     if (!ev.action.isKey() || !this.isCurrent(ev.action)) return;
+    if (isImportChromeSessionMessage(ev.payload)) {
+      await this.dashboard.importChromeSession();
+      return;
+    }
     if (isModelsRequest(ev.payload)) {
       const usage = await this.dashboard.getUsage({ source: "dashboard" });
       if (this.isCurrent(ev.action)) await this.sendModels(ev.action, usage);
