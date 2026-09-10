@@ -2,7 +2,7 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "com.refactor-ia.nan",
   "Name": "NaN Dashboard",
-  "Version": "1.0.6.0",
+  "Version": "1.0.7.0",
   "Author": "Refactor IA",
   "URL": "https://github.com/refactor-ia/streamdeck-nan",
   "Description": "NaN Dashboard usage for Stream Deck+, with Claude, Codex, and experimental Grok integrations.",
