@@ -2,7 +2,7 @@ import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
 
 export type NanModelSettings = Partial<{ model: string }>;
 
-const COLORS = { bg: "#06080f", warningBg: "#201200", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" } as const;
+const COLORS = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" } as const;
 
 type Display = {
   readonly label: readonly string[];
@@ -14,6 +14,8 @@ type Display = {
   readonly gauge: number;
   readonly background?: string;
   readonly border?: string;
+  readonly foreground?: string;
+  readonly gaugeTrack?: string;
 };
 
 /** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
@@ -38,13 +40,18 @@ export function renderNanModelUsageSvg(state: NanDashboardUsage, settings: NanMo
         : !state.quota && !state.metrics
           ? unavailable(state.error)
           : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", accent: COLORS.gold, gauge: 0 };
-  const labels = display.label.map((line, index) => text(line, 6, display.label.length === 1 ? 16 : 11 + index * 8, COLORS.fg, 8)).join("");
-  const border = display.border ? `<rect x="1" y="1" width="70" height="70" rx="5" fill="none" stroke="${display.border}" stroke-width="1"/>` : "";
+  const warning = display.background !== undefined;
+  const foreground = display.foreground ?? COLORS.fg;
+  const gaugeY = warning ? 58 : 60;
+  const gaugeHeight = warning ? 2 : 3;
+  const gaugeRadius = warning ? 1 : 1.5;
+  const labels = display.label.map((line, index) => text(line, 6, display.label.length === 1 ? 16 : 11 + index * 8, foreground, 8)).join("");
+  const border = display.border ? `<rect x="2" y="2" width="68" height="68" rx="4" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${display.background ?? COLORS.bg}"/>${border}<rect x="6" y="4" width="60" height="1" fill="${COLORS.blue}"/>
-${labels}${text(display.primary, 6, 38, display.accent, 16)}${text(display.secondary, 6, 48, COLORS.fg, 7)}${text(display.tertiary, 6, 56, COLORS.fg, 7)}
-<rect x="6" y="60" width="60" height="3" rx="1.5" fill="#202633"/><rect x="6" y="60" width="${display.gauge.toFixed(2)}" height="3" rx="1.5" fill="${display.accent}"/>
-${text(display.status || "LIVE", 6, 70, display.status ? COLORS.rose : COLORS.green, 7)}</svg>`;
+<rect width="72" height="72" rx="6" fill="${display.background ?? COLORS.bg}"/>${border}<rect x="6" y="4" width="60" height="1" fill="${warning ? foreground : COLORS.blue}"/>
+${labels}${text(display.primary, 6, 38, display.accent, 16)}${text(display.secondary, 6, 48, foreground, 7)}${text(display.tertiary, 6, 56, foreground, 7)}
+<rect x="6" y="${gaugeY}" width="60" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.gaugeTrack ?? "#202633"}"/><rect x="6" y="${gaugeY}" width="${display.gauge.toFixed(2)}" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.accent}"/>
+${text(display.status || "LIVE", 6, warning ? 67 : 70, warning ? foreground : display.status ? COLORS.rose : COLORS.green, 7)}</svg>`;
 }
 
 function pendingSelection(): Display {
@@ -52,17 +59,23 @@ function pendingSelection(): Display {
 }
 
 function capped(model: { model: string; tokensUsed: number; cap: number; percentage: number; resetAt: string | null; windowHours: number | null }, stale: boolean): Display {
-  const warning = model.percentage > 80;
+  const warning = model.percentage > 90
+    ? { background: "#9D1020", foreground: "#FFF5F6", gaugeTrack: "#3B060D" }
+    : model.percentage > 80
+      ? { background: "#FFC247", foreground: "#161616", gaugeTrack: "#6C4500" }
+      : undefined;
   return {
     label: labelLines(model.model),
     primary: `${formatPercentage(model.percentage)}%`,
     secondary: `USED ${compact(model.tokensUsed)}`,
     tertiary: `CAP ${compact(model.cap)} · ${period(model)}`,
     status: stale ? "STALE" : "",
-    accent: warning || stale ? COLORS.gold : COLORS.green,
+    accent: warning?.foreground ?? (stale ? COLORS.gold : COLORS.green),
     gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
-    background: warning ? COLORS.warningBg : undefined,
-    border: warning ? COLORS.gold : undefined,
+    background: warning?.background,
+    border: warning?.foreground,
+    foreground: warning?.foreground,
+    gaugeTrack: warning?.gaugeTrack,
   };
 }
 
