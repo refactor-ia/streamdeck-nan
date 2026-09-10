@@ -3,14 +3,10 @@ name: CI
 on:
   push:
     branches:
-      # Remove import/sanitized-source after the default-branch transition.
       - main
-      - import/sanitized-source
   pull_request:
     branches:
-      # Remove import/sanitized-source after the default-branch transition.
       - main
-      - import/sanitized-source
 
 permissions:
   contents: read

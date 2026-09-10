@@ -77,7 +77,7 @@ test("local Gitleaks composite pins the Darwin CLI and scans full history safely
 
 test("CI triggers pushes and pull requests with read-only permissions", async () => {
   const ci = await workflow("ci.yml");
-  const expectedBranches = ["main", "import/sanitized-source"];
+  const expectedBranches = ["main"];
   assert.deepEqual(ci.on.push.branches, expectedBranches);
   assert.deepEqual(ci.on.pull_request.branches, expectedBranches);
   assert.deepEqual(ci.on.push.branches, ci.on.pull_request.branches);
