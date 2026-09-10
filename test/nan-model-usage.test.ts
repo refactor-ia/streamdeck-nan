@@ -9,6 +9,100 @@ const quota = {
   uncappedModels: [{ model: "uncapped-qwen", tokensUsed: 42_000, resetAt: null, windowHours: 4 }],
 };
 
+function cappedSvg(percentage: number, stale = false): string {
+  return renderNanModelUsageSvg({ source: "dashboard", quota: { ...quota, models: [{ ...quota.models[0], percentage }] }, stale }, { model: "qwen3.8-flash" });
+}
+
+
+test("capped model warns when the unrounded percentage first exceeds 80", () => {
+  const exact = cappedSvg(80);
+  assert.match(exact, />80%<\/text>/);
+  assert.match(exact, /<rect width="72" height="72" rx="6" fill="#06080f"\/>/);
+  assert.doesNotMatch(exact, /stroke="#dfbd76"/);
+
+  const justAbove = cappedSvg(80.01);
+  assert.match(justAbove, />80%<\/text>/);
+  assert.match(justAbove, /<rect width="72" height="72" rx="6" fill="#201200"\/>/);
+  assert.match(justAbove, /<rect x="1" y="1" width="70" height="70" rx="5" fill="none" stroke="#dfbd76" stroke-width="1"\/>/);
+});
+
+function contrast(first: string, second: string): number {
+  const luminance = (value: string): number => {
+    const channels = value.slice(1).match(/.{2}/g)!.map((channel) => Number.parseInt(channel, 16) / 255);
+    const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+  const [lighter, darker] = [luminance(first), luminance(second)].sort((left, right) => right - left);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+test("capped warning keeps raw percentage, stale status, geometry, and readable content", () => {
+  const justAbove = cappedSvg(80.1);
+  assert.match(justAbove, />80.1%<\/text>/);
+  assert.match(justAbove, /width="48.06" height="3" rx="1.5" fill="#dfbd76"/);
+
+  const overCap = cappedSvg(125);
+  assert.match(overCap, /width="72" height="72" viewBox="0 0 72 72"/);
+  assert.match(overCap, />125%<\/text>/);
+  assert.match(overCap, />USED 125K<\/text>/);
+  assert.match(overCap, />CAP 100K · OCT 1<\/text>/);
+  assert.match(overCap, /<rect x="6" y="60" width="60.00" height="3" rx="1.5" fill="#dfbd76"\/>/);
+  assert.match(overCap, />LIVE<\/text>/);
+  assert.doesNotMatch(overCap, /WARNING/);
+  assert.match(overCap, /<rect x="1" y="1" width="70" height="70" rx="5" fill="none" stroke="#dfbd76" stroke-width="1"\/>/);
+
+  const staleHigh = cappedSvg(125, true);
+  assert.match(staleHigh, /fill="#201200"/);
+  assert.match(staleHigh, />STALE<\/text>/);
+  assert.match(staleHigh, /fill="#cb7c94"/);
+});
+
+test("capped warning returns to the unchanged normal layout at or below 80", () => {
+  const below = cappedSvg(79.9);
+  const exact = cappedSvg(80);
+  const high = cappedSvg(80.01);
+  const lowAfterHigh = cappedSvg(80);
+  for (const svg of [below, exact, lowAfterHigh]) {
+    assert.match(svg, /<rect width="72" height="72" rx="6" fill="#06080f"\/>/);
+    assert.match(svg, /<rect x="6" y="4" width="60" height="1" fill="#7fb4ca"\/>/);
+    assert.match(svg, /fill="#b7cc85"/);
+    assert.doesNotMatch(svg, /stroke="#dfbd76"/);
+  }
+  assert.match(below, />79.9%<\/text>/);
+  assert.match(exact, />80%<\/text>/);
+  assert.match(high, />80%<\/text>/);
+});
+
+test("warning styling does not affect uncapped, metrics-only, unselected, unavailable, or import routes", () => {
+  const ready: NanDashboardUsage = { source: "dashboard", quota, stale: false };
+  const uncapped = renderNanModelUsageSvg(ready, { model: "uncapped-qwen" });
+  const unselected = renderNanModelUsageSvg(ready, {});
+  const metrics = {
+    last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] },
+    monthToDate: { totalTokens: 15, byModel: [{ model: "metrics-only", inputTokens: 10, outputTokens: 5, totalTokens: 15 }] }, allTime: { totalTokens: 0, byModel: [] },
+  };
+  const metricsOnly = renderNanModelUsageSvg({ source: "dashboard", metrics, stale: false }, { model: "metrics-only" });
+  const unavailable = renderNanModelUsageSvg({ source: "dashboard", stale: false }, { model: "qwen3.8-flash" });
+  const importing = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" });
+  for (const svg of [uncapped, unselected, metricsOnly, unavailable, importing]) {
+    assert.match(svg, /<rect width="72" height="72" rx="6" fill="#06080f"\/>/);
+    assert.doesNotMatch(svg, /stroke="#dfbd76"/);
+  }
+  assert.match(uncapped, /UNCAPPED/);
+  assert.match(metricsOnly, /MONTH TOKENS/);
+  assert.match(unselected, /CHOOSE MODEL/);
+  assert.match(unavailable, /NO DATA/);
+  assert.match(importing, /IMPORT/);
+});
+
+test("warning text and border colors meet contrast thresholds against their adjacent background", () => {
+  const warningBackground = "#201200";
+  for (const color of ["#f3f6f9", "#dfbd76", "#b7cc85", "#cb7c94"]) {
+    assert.ok(contrast(color, warningBackground) >= 4.5, `${color} must meet text contrast`);
+  }
+  assert.ok(contrast("#dfbd76", warningBackground) >= 3, "warning border must meet non-text contrast");
+});
+
 test("model key gives over-cap consumption its own readable percentage, raw bands, and reset date", () => {
   const state: NanDashboardUsage = { source: "dashboard", quota, stale: false };
   const svg = renderNanModelUsageSvg(state, { model: "qwen3.8-flash" });

@@ -12648,7 +12648,7 @@ let NanDemoUsage = (() => {
     return _classThis;
 })();
 
-const COLORS$1 = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" };
+const COLORS$1 = { bg: "#06080f", warningBg: "#201200", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" };
 /** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
 function renderNanModelUsageImage(state, settings) {
     return `data:image/svg+xml,${encodeURIComponent(renderNanModelUsageSvg(state, settings))}`;
@@ -12671,8 +12671,9 @@ function renderNanModelUsageSvg(state, settings) {
                     ? unavailable(state.error)
                     : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", accent: COLORS$1.gold, gauge: 0 };
     const labels = display.label.map((line, index) => text$1(line, 6, display.label.length === 1 ? 16 : 11 + index * 8, COLORS$1.fg, 8)).join("");
+    const border = display.border ? `<rect x="1" y="1" width="70" height="70" rx="5" fill="none" stroke="${display.border}" stroke-width="1"/>` : "";
     return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${COLORS$1.bg}"/><rect x="6" y="4" width="60" height="1" fill="${COLORS$1.blue}"/>
+<rect width="72" height="72" rx="6" fill="${display.background ?? COLORS$1.bg}"/>${border}<rect x="6" y="4" width="60" height="1" fill="${COLORS$1.blue}"/>
 ${labels}${text$1(display.primary, 6, 38, display.accent, 16)}${text$1(display.secondary, 6, 48, COLORS$1.fg, 7)}${text$1(display.tertiary, 6, 56, COLORS$1.fg, 7)}
 <rect x="6" y="60" width="60" height="3" rx="1.5" fill="#202633"/><rect x="6" y="60" width="${display.gauge.toFixed(2)}" height="3" rx="1.5" fill="${display.accent}"/>
 ${text$1(display.status || "LIVE", 6, 70, display.status ? COLORS$1.rose : COLORS$1.green, 7)}</svg>`;
@@ -12681,15 +12682,17 @@ function pendingSelection() {
     return { label: ["CHOOSE MODEL"], primary: "--", secondary: "USE INSPECTOR", tertiary: "", status: "", accent: COLORS$1.blue, gauge: 0 };
 }
 function capped(model, stale) {
+    const warning = model.percentage > 80;
     return {
         label: labelLines(model.model),
         primary: `${formatPercentage(model.percentage)}%`,
         secondary: `USED ${compact$1(model.tokensUsed)}`,
         tertiary: `CAP ${compact$1(model.cap)} · ${period(model)}`,
         status: stale ? "STALE" : "",
-        accent: stale ? COLORS$1.gold : COLORS$1.green,
-        // The API can be over cap; clamp only this visual gauge, never displayed data.
+        accent: warning || stale ? COLORS$1.gold : COLORS$1.green,
         gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
+        background: warning ? COLORS$1.warningBg : undefined,
+        border: warning ? COLORS$1.gold : undefined,
     };
 }
 function isCapped(value) {
