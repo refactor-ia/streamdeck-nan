@@ -20,6 +20,7 @@
   </div>
   <div id="nanChromeImportSettings" hidden>
     <button id="importChromeSession" type="button">Import session from Chrome</button>
+    <p id="importChromeSessionStatus" role="status" aria-live="polite"></p>
     <p>Dashboard quota uses an imported Chrome session only after you choose Import session from Chrome.</p>
   </div>
   <div id="nanSettings" hidden>
@@ -47,11 +48,18 @@
     const GET_MODELS = "nan.modelUsage.getModels.v1";
     const REFRESH_MODELS = "nan.modelUsage.refreshModels.v1";
     const MODELS = "nan.modelUsage.models.v1";
+    const IMPORT_CHROME_SESSION = "nan.importChromeSession.v1";
+    const IMPORT_CHROME_SESSION_RESULT = "nan.importChromeSession.result.v1";
+    const IMPORT_REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+    const IMPORT_WATCHDOG_MS = 120_000;
     let socket;
     let context;
     let settings = {};
     let actionUuid = "";
     let modelEntries = [];
+    let pendingImportRequestId = "";
+    let importWatchdog;
+    let importRequestSequence = 0;
 
     function connectElgatoStreamDeckSocket(port, uuid, registerEvent, _info, actionInfo) {
       context = uuid;
@@ -72,8 +80,10 @@
             modelEntries = message.payload.models.filter((entry) => typeof entry?.id === "string" && entry.id.length > 0 && entry.id.length <= 128 && entry.id.trim() === entry.id && !/[\u0000-\u001f\u007f-\u009f]/.test(entry.id));
             render();
           }
+          if (message?.event === "sendToPropertyInspector") receiveImportResult(message.payload);
         } catch (_) {}
       });
+      socket.addEventListener("close", () => clearPendingImport("Connection closed. Reopen this action to try again."));
       try {
         const parsedActionInfo = JSON.parse(actionInfo);
         actionUuid = parsedActionInfo.action || "";
@@ -82,7 +92,50 @@
       render();
     }
 
-    function send(event, payload) { socket.send(JSON.stringify({ event, ...payload })); }
+    function send(event, payload) {
+      if (socket?.readyState !== WebSocket.OPEN) return false;
+      try {
+        socket.send(JSON.stringify({ event, ...payload }));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function isNanChromeImportAction() {
+      return actionUuid === NAN_DEMO_ACTION || actionUuid === NAN_MODEL_ACTION || actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
+    }
+    function renderImportStatus(message) {
+      const button = document.querySelector("#importChromeSession");
+      button.disabled = pendingImportRequestId !== "";
+      document.querySelector("#importChromeSessionStatus").textContent = message || "";
+    }
+    function clearPendingImport(message) {
+      if (importWatchdog) clearTimeout(importWatchdog);
+      importWatchdog = undefined;
+      pendingImportRequestId = "";
+      renderImportStatus(message);
+    }
+    function beginImport() {
+      if (!isNanChromeImportAction() || pendingImportRequestId) return;
+      const requestId = `import_${Date.now().toString(36)}_${++importRequestSequence}`;
+      if (!IMPORT_REQUEST_ID.test(requestId)) return;
+      if (!send("sendToPlugin", { context, payload: { kind: IMPORT_CHROME_SESSION, requestId } })) {
+        renderImportStatus("Unable to contact the plugin. Reopen this action and try again.");
+        return;
+      }
+      pendingImportRequestId = requestId;
+      renderImportStatus("Importing session from Chrome. Please wait.");
+      importWatchdog = setTimeout(() => {
+        if (pendingImportRequestId === requestId) clearPendingImport("Still waiting for the plugin. You can retry when ready.");
+      }, IMPORT_WATCHDOG_MS);
+    }
+    function receiveImportResult(payload) {
+      if (!pendingImportRequestId || typeof payload !== "object" || payload === null) return;
+      if (Object.keys(payload).length !== 3 || payload.kind !== IMPORT_CHROME_SESSION_RESULT || payload.requestId !== pendingImportRequestId) return;
+      if (payload.outcome === "ready") clearPendingImport("Session imported. Usage will refresh shortly.");
+      else if (payload.outcome === "failed") clearPendingImport("Import could not be completed. Check Chrome, then try again.");
+      else if (payload.outcome === "busy") clearPendingImport("Another import is already in progress. Please wait and try again.");
+    }
     function save(patch) {
       if (actionUuid === NAN_DASHBOARD_ACTION) return;
       settings = { ...settings, ...patch };
@@ -160,14 +213,7 @@
       if (actionUuid !== NAN_MODEL_ACTION || socket?.readyState !== WebSocket.OPEN) return;
       send("sendToPlugin", { context, payload: { kind: REFRESH_MODELS } });
     });
-    document.querySelector("#importChromeSession").addEventListener("click", () => {
-      const isNanDemo = actionUuid === NAN_DEMO_ACTION;
-      const isNanModel = actionUuid === NAN_MODEL_ACTION;
-      const isNanMetrics = actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
-      const isNanChromeImportAction = isNanDemo || isNanModel || isNanMetrics;
-      if (!isNanChromeImportAction || socket?.readyState !== WebSocket.OPEN) return;
-      send("sendToPlugin", { context, payload: { kind: "nan.importChromeSession.v1" } });
-    });
+    document.querySelector("#importChromeSession").addEventListener("click", beginImport);
   </script>
 </body>
 </html>

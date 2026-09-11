@@ -12481,11 +12481,24 @@ const defaultWatchScheduler = {
 };
 
 const IMPORT_CHROME_SESSION_KIND = "nan.importChromeSession.v1";
-/** Accepts only the explicit, payload-free Chrome session import request. */
-function isImportChromeSessionMessage(payload) {
-    return typeof payload === "object" && payload !== null
-        && Object.keys(payload).length === 1
-        && payload.kind === IMPORT_CHROME_SESSION_KIND;
+const IMPORT_CHROME_SESSION_RESULT_KIND = "nan.importChromeSession.result.v1";
+const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Parses an explicit legacy request or an exact correlated request before Chrome acquisition. */
+function parseImportChromeSessionMessage(payload) {
+    if (typeof payload !== "object" || payload === null || payload.kind !== IMPORT_CHROME_SESSION_KIND)
+        return undefined;
+    const keys = Object.keys(payload);
+    if (keys.length === 1)
+        return { kind: IMPORT_CHROME_SESSION_KIND };
+    const requestId = payload.requestId;
+    if (keys.length === 2 && typeof requestId === "string" && REQUEST_ID.test(requestId)) {
+        return { kind: IMPORT_CHROME_SESSION_KIND, requestId };
+    }
+    return undefined;
+}
+/** Produces the only data shape sent back to the originating property inspector. */
+function createImportChromeSessionResult(requestId, outcome) {
+    return { kind: IMPORT_CHROME_SESSION_RESULT_KIND, requestId, outcome };
 }
 
 let NanDemoUsage = (() => {
@@ -12560,7 +12573,10 @@ let NanDemoUsage = (() => {
             }
         }
         async onSendToPlugin(ev) {
-            if (!ev.action.isDial() || !this.hasActiveLifecycle(ev.action) || !isImportChromeSessionMessage(ev.payload))
+            if (!ev.action.isDial() || !this.hasActiveLifecycle(ev.action))
+                return;
+            const request = parseImportChromeSessionMessage(ev.payload);
+            if (!request)
                 return;
             const action = ev.action;
             const isCurrent = this.lifecycleGuard(action);
@@ -12568,13 +12584,32 @@ let NanDemoUsage = (() => {
             if (!isCurrent())
                 return;
             await action.setFeedback(renderNanImportProgress());
-            const result = await this.dashboard.importChromeSession();
+            let result;
+            let outcome = "failed";
+            try {
+                result = await this.dashboard.importChromeSession();
+                outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+            }
+            catch {
+                result = { state: "import-unavailable" };
+            }
             if (!isCurrent() || !isSameAppearance())
                 return;
-            const settings = this.desiredSettings.get(action.id) ?? {};
-            await this.render(action, result.state === "ready"
-                ? { source: "dashboard", quota: result.quota, stale: false }
-                : { source: "dashboard", stale: false, error: result.state }, settings);
+            if (result) {
+                const settings = this.desiredSettings.get(action.id) ?? {};
+                await this.render(action, result.state === "ready"
+                    ? { source: "dashboard", quota: result.quota, stale: false }
+                    : { source: "dashboard", stale: false, error: result.state }, settings);
+            }
+            await this.sendImportResult(action, request, outcome, isCurrent, isSameAppearance);
+        }
+        async sendImportResult(action, request, outcome, isCurrent, isSameAppearance) {
+            if (!("requestId" in request) || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id)
+                return;
+            try {
+                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+            }
+            catch { }
         }
         onWillDisappear(ev) {
             super.onWillDisappear(ev);
@@ -12821,8 +12856,15 @@ let NanModelUsage = (() => {
         async onSendToPlugin(ev) {
             if (!ev.action.isKey() || !this.isCurrent(ev.action))
                 return;
-            if (isImportChromeSessionMessage(ev.payload)) {
-                await this.dashboard.importChromeSession();
+            const importRequest = parseImportChromeSessionMessage(ev.payload);
+            if (importRequest) {
+                let outcome = "failed";
+                try {
+                    const result = await this.dashboard.importChromeSession();
+                    outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+                }
+                catch { }
+                await this.sendImportResult(ev.action, importRequest, outcome);
                 return;
             }
             if (isModelsRequest(ev.payload)) {
@@ -12855,6 +12897,14 @@ let NanModelUsage = (() => {
             if (this.visible.get(entry.action.id) !== entry)
                 return;
             await entry.action.setImage(image);
+        }
+        async sendImportResult(action, request, outcome) {
+            if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
+                return;
+            try {
+                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+            }
+            catch { }
         }
         sendModels(action, usage) {
             // The SDK routes this only to its current property-inspector context; do not send a
@@ -12948,9 +12998,18 @@ class NanMetricsUsage extends SingletonAction {
         await this.dashboard.getUsage({ source: "dashboard" });
     }
     async onSendToPlugin(ev) {
-        if (!ev.action.isKey() || !this.isCurrent(ev.action) || !isImportChromeSessionMessage(ev.payload))
+        if (!ev.action.isKey() || !this.isCurrent(ev.action))
             return;
-        await this.dashboard.importChromeSession();
+        const request = parseImportChromeSessionMessage(ev.payload);
+        if (!request)
+            return;
+        let outcome = "failed";
+        try {
+            const result = await this.dashboard.importChromeSession();
+            outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+        }
+        catch { }
+        await this.sendImportResult(ev.action, request, outcome);
     }
     onWillDisappear(ev) {
         const entry = this.visible.get(ev.action.id);
@@ -12961,6 +13020,14 @@ class NanMetricsUsage extends SingletonAction {
     }
     isCurrent(action) {
         return this.visible.get(action.id)?.action === action;
+    }
+    async sendImportResult(action, request, outcome) {
+        if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
+            return;
+        try {
+            await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+        }
+        catch { }
     }
     async redrawVisible(usage) {
         await Promise.all([...this.visible.values()].map((entry) => this.render(entry, usage)));

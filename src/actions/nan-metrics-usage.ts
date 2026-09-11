@@ -5,12 +5,13 @@ import {
   type KeyDownEvent,
   type SendToPluginEvent,
   SingletonAction,
+  streamDeck,
   type WillAppearEvent,
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { renderNanMetricsUsageImage, type NanMetricsPeriod } from "./nan-metrics-feedback.js";
-import { isImportChromeSessionMessage } from "./nan-chrome-import-message.js";
+import { createImportChromeSessionResult, parseImportChromeSessionMessage, type ImportChromeSessionRequest } from "./nan-chrome-import-message.js";
 
 type NanMetricsSettings = Record<string, never>;
 type VisibleMetricsAction = { readonly action: KeyAction<NanMetricsSettings>; disposeWatch: () => void };
@@ -48,8 +49,15 @@ abstract class NanMetricsUsage extends SingletonAction<NanMetricsSettings> {
   }
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, NanMetricsSettings>): Promise<void> {
-    if (!ev.action.isKey() || !this.isCurrent(ev.action) || !isImportChromeSessionMessage(ev.payload)) return;
-    await this.dashboard.importChromeSession();
+    if (!ev.action.isKey() || !this.isCurrent(ev.action)) return;
+    const request = parseImportChromeSessionMessage(ev.payload);
+    if (!request) return;
+    let outcome: "ready" | "failed" | "busy" = "failed";
+    try {
+      const result = await this.dashboard.importChromeSession();
+      outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+    } catch {}
+    await this.sendImportResult(ev.action, request, outcome);
   }
 
   override onWillDisappear(ev: WillDisappearEvent<NanMetricsSettings>): void {
@@ -61,6 +69,17 @@ abstract class NanMetricsUsage extends SingletonAction<NanMetricsSettings> {
 
   private isCurrent(action: KeyAction<NanMetricsSettings>): boolean {
     return this.visible.get(action.id)?.action === action;
+  }
+
+  private async sendImportResult(
+    action: KeyAction<NanMetricsSettings>,
+    request: ImportChromeSessionRequest,
+    outcome: "ready" | "failed" | "busy",
+  ): Promise<void> {
+    if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id) return;
+    try {
+      await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+    } catch {}
   }
 
   private async redrawVisible(usage: NanDashboardUsage): Promise<void> {

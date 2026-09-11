@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { Script, createContext } from "node:vm";
 
 const manifest = JSON.parse(readFileSync("com.refactor-ia.nan.sdPlugin/manifest.json", "utf8"));
 const inspector = readFileSync("com.refactor-ia.nan.sdPlugin/ui/property-inspector.html", "utf8");
@@ -25,9 +26,60 @@ test("NaN inspector exposes explicit dashboard import for the dial and all three
   assert.match(inspector, /Dashboard quota uses an imported Chrome session/);
   assert.match(inspector, /const isNanChromeImportAction = isNanDemo \|\| isNanModel \|\| isNanMetrics/);
   assert.match(inspector, /#nanChromeImportSettings"\)\.hidden = !isNanChromeImportAction/);
-  assert.match(inspector, /if \(!isNanChromeImportAction \|\| socket\?\.readyState !== WebSocket\.OPEN\) return;/);
-  assert.match(inspector, /send\("sendToPlugin", \{ context, payload: \{ kind: "nan\.importChromeSession\.v1" \} \}\)/);
+  assert.match(inspector, /id="importChromeSessionStatus" role="status" aria-live="polite"/);
+  assert.match(inspector, /const IMPORT_CHROME_SESSION_RESULT = "nan\.importChromeSession\.result\.v1"/);
+  assert.match(inspector, /const IMPORT_WATCHDOG_MS = 120_000/);
+  assert.match(inspector, /payload: \{ kind: IMPORT_CHROME_SESSION, requestId \}/);
+  assert.match(inspector, /pendingImportRequestId/);
+  assert.match(inspector, /socket\.addEventListener\("close"/);
   assert.doesNotMatch(inspector, /nanSource|Legacy collector|collector-config|Keychain|cookie|https?:\/\//i);
+});
+
+test("property inspector executes correlated import UI states without accepting foreign, stale, or malformed results", () => {
+  const harness = createInspectorHarness();
+  harness.connect("com.refactor-ia.nan.nan-demo");
+  harness.socket.emit("open");
+
+  harness.clickImport();
+  const first = harness.lastImportRequest();
+  assert.match(first.requestId, /^[A-Za-z0-9_-]{1,64}$/);
+  assert.equal(harness.importButton.disabled, true);
+  assert.equal(harness.status.textContent, "Importing session from Chrome. Please wait.");
+  harness.clickImport();
+  assert.equal(harness.importRequests().length, 1, "a local duplicate click does not send again");
+
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: "other", outcome: "ready" });
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: first.requestId, outcome: "ready", extra: "sentinel-secret" });
+  assert.equal(harness.importButton.disabled, true);
+  assert.equal(harness.status.textContent, "Importing session from Chrome. Please wait.");
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: first.requestId, outcome: "ready" });
+  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.status.textContent, "Session imported. Usage will refresh shortly.");
+
+  harness.clickImport();
+  const busy = harness.lastImportRequest();
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: busy.requestId, outcome: "busy" });
+  assert.equal(harness.status.textContent, "Another import is already in progress. Please wait and try again.");
+  harness.clickImport();
+  const failed = harness.lastImportRequest();
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: failed.requestId, outcome: "failed" });
+  assert.equal(harness.status.textContent, "Import could not be completed. Check Chrome, then try again.");
+
+  harness.clickImport();
+  const timedOut = harness.lastImportRequest();
+  harness.runLatestTimer();
+  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.status.textContent, "Still waiting for the plugin. You can retry when ready.");
+  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: timedOut.requestId, outcome: "ready" });
+  assert.equal(harness.status.textContent, "Still waiting for the plugin. You can retry when ready.", "late responses are stale");
+
+  harness.clickImport();
+  harness.socket.readyState = 3;
+  harness.socket.emit("close");
+  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.status.textContent, "Connection closed. Reopen this action to try again.");
+  harness.clickImport();
+  assert.equal(harness.status.textContent, "Unable to contact the plugin. Reopen this action and try again.");
 });
 
 test("NaN model and total keypad panels stay isolated from dial and refresh controls", () => {
@@ -94,6 +146,86 @@ test("NaN Dashboard launcher inspector is settings-free and cannot request model
   assert.match(inspector, /if \(actionUuid !== NAN_MODEL_ACTION \|\| socket\?\.readyState !== WebSocket\.OPEN\) return;/);
   assert.match(inspector, /if \(isNanDashboardLauncher\) return;/);
 });
+
+function createInspectorHarness(): {
+  connect(action: string): void;
+  socket: FakeWebSocket;
+  importButton: FakeElement;
+  status: FakeElement;
+  clickImport(): void;
+  importRequests(): Array<{ kind: string; requestId: string }>;
+  lastImportRequest(): { kind: string; requestId: string };
+  runLatestTimer(): void;
+} {
+  const elements = new Map<string, FakeElement>();
+  for (const id of ["refreshSettings", "nanChromeImportSettings", "nanSettings", "nanModelUsageSettings", "autoRefresh", "refreshInterval", "nanModel", "nanKeyModel", "refreshNanModels", "importChromeSession", "importChromeSessionStatus"]) {
+    elements.set(`#${id}`, new FakeElement());
+  }
+  const timers: Array<() => void> = [];
+  const document = {
+    querySelector(selector: string): FakeElement { return elements.get(selector)!; },
+    createElement(): FakeElement { return new FakeElement(); },
+  };
+  const context = createContext({
+    document,
+    WebSocket: FakeWebSocket,
+    setTimeout(callback: () => void): number { timers.push(callback); return timers.length; },
+    clearTimeout(): void {},
+  });
+  const script = inspector.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  assert.ok(script, "property inspector script exists");
+  new Script(script).runInContext(context);
+  const requests = (): Array<{ kind: string; requestId: string }> => FakeWebSocket.instances.at(-1)!.sent
+    .filter((message) => message.event === "sendToPlugin")
+    .map((message) => message.payload);
+  return {
+    connect(action: string): void {
+      (context as unknown as { connectElgatoStreamDeckSocket: Function }).connectElgatoStreamDeckSocket(1234, "context", "registerPropertyInspector", "{}", JSON.stringify({ action, payload: { settings: {} } }));
+    },
+    get socket(): FakeWebSocket { return FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!; },
+    importButton: elements.get("#importChromeSession")!,
+    status: elements.get("#importChromeSessionStatus")!,
+    clickImport(): void { elements.get("#importChromeSession")!.emit("click"); },
+    importRequests: requests,
+    lastImportRequest(): { kind: string; requestId: string } { return requests().at(-1)!; },
+    runLatestTimer(): void { timers.at(-1)!(); },
+  };
+}
+
+class FakeElement {
+  disabled = false;
+  hidden = false;
+  checked = false;
+  value = "";
+  textContent = "";
+  dataset: Record<string, string> = {};
+  options: FakeElement[] = [];
+  private readonly listeners = new Map<string, Array<() => void>>();
+  addEventListener(event: string, listener: () => void): void {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+  }
+  emit(event: string): void { for (const listener of this.listeners.get(event) ?? []) listener(); }
+  replaceChildren(...children: FakeElement[]): void { this.options = children; }
+  append(child: FakeElement): void { this.options.push(child); }
+  querySelector(): undefined { return undefined; }
+}
+
+class FakeWebSocket {
+  static readonly OPEN = 1;
+  static instances: FakeWebSocket[] = [];
+  readyState = FakeWebSocket.OPEN;
+  readonly sent: Array<Record<string, unknown>> = [];
+  private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
+  constructor(_url: string) { FakeWebSocket.instances.push(this); }
+  addEventListener(event: string, listener: (event: { data?: string }) => void): void {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+  }
+  send(value: string): void { this.sent.push(JSON.parse(value)); }
+  emit(event: string): void { for (const listener of this.listeners.get(event) ?? []) listener({}); }
+  message(payload: unknown): void {
+    for (const listener of this.listeners.get("message") ?? []) listener({ data: JSON.stringify({ event: "sendToPropertyInspector", payload }) });
+  }
+}
 
 test("NaN runtime images are RGBA PNGs at required dimensions and the editable source is unchanged", () => {
   for (const [path, expectedSize] of [

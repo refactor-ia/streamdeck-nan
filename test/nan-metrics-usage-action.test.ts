@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHooks } from "node:module";
-import type { KeyAction } from "@elgato/streamdeck";
+import { streamDeck, type KeyAction } from "@elgato/streamdeck";
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
+import { createImportChromeSessionResult } from "../src/actions/nan-chrome-import-message.js";
 
 const actionUrl = new URL("../src/actions/nan-metrics-usage.ts", import.meta.url);
 registerHooks({
@@ -66,6 +67,34 @@ test("total and monthly keypad actions import only exact messages from current v
   assert.equal(dashboard.imports, 2);
 });
 
+test("total and monthly keys return only their own correlated import outcomes", async (t) => {
+  const dashboard = new FakeDashboard();
+  const sent: unknown[] = [];
+  const totalKey = fakeKey("total", []);
+  const monthlyKey = fakeKey("monthly", []);
+  replaceUi(t, { action: totalKey, sendToPropertyInspector: async (payload: unknown) => { sent.push(payload); } });
+  const { NanTotalTokensUsage, NanMonthlyTokensUsage } = await loadActions();
+  const total = new NanTotalTokensUsage(dashboard);
+  const monthly = new NanMonthlyTokensUsage(dashboard);
+  await total.onWillAppear({ action: totalKey, payload: { settings: {} } } as never);
+  await monthly.onWillAppear({ action: monthlyKey, payload: { settings: {} } } as never);
+
+  dashboard.importResult = { state: "import-busy" };
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1", requestId: "total_1" } } as never);
+  (streamDeck.ui as unknown as { action: KeyAction }).action = monthlyKey;
+  dashboard.importResult = { state: "import-unavailable" };
+  await monthly.onSendToPlugin({ action: monthlyKey, payload: { kind: "nan.importChromeSession.v1", requestId: "monthly_1" } } as never);
+  assert.deepEqual(sent, [
+    createImportChromeSessionResult("total_1", "busy"),
+    createImportChromeSessionResult("monthly_1", "failed"),
+  ]);
+
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1", requestId: "bad id" } } as never);
+  total.onWillDisappear({ action: totalKey } as never);
+  await total.onSendToPlugin({ action: totalKey, payload: { kind: "nan.importChromeSession.v1", requestId: "stale_1" } } as never);
+  assert.equal(dashboard.imports, 2);
+});
+
 test("total and monthly keypad actions share watch-driven snapshots and dispose only their own appearance", async () => {
   const dashboard = new FakeDashboard();
   const images: string[] = [];
@@ -100,6 +129,7 @@ class FakeDashboard {
   reads = 0;
   imports = 0;
   getCachedCalls = 0;
+  importResult: { state: "ready" } | { state: "import-busy" | "import-unavailable" } = { state: "ready" };
   private readonly listeners = new Set<(usage: NanDashboardUsage) => void>();
 
   subscribe(listener: (usage: NanDashboardUsage) => void): () => void {
@@ -113,10 +143,10 @@ class FakeDashboard {
   }
   getCachedUsage(): NanDashboardUsage { this.getCachedCalls += 1; return cached; }
   async getUsage(): Promise<NanDashboardUsage> { this.reads += 1; return cached; }
-  async importChromeSession(): Promise<{ state: "ready" }> {
+  async importChromeSession(): Promise<{ state: "ready" } | { state: "import-busy" | "import-unavailable" }> {
     this.imports += 1;
     await this.publish(cached);
-    return { state: "ready" };
+    return this.importResult;
   }
   async publish(usage: NanDashboardUsage): Promise<void> {
     for (const listener of this.listeners) listener(usage);
@@ -126,4 +156,10 @@ class FakeDashboard {
 
 function fakeKey(id: string, images: string[]): KeyAction<Record<string, never>> {
   return { id, isKey: () => true, setImage: async (image: string) => { images.push(image); } } as KeyAction<Record<string, never>>;
+}
+
+function replaceUi(t: test.TestContext, ui: object): void {
+  const descriptor = Object.getOwnPropertyDescriptor(streamDeck, "ui");
+  Object.defineProperty(streamDeck, "ui", { configurable: true, value: ui });
+  t.after(() => Object.defineProperty(streamDeck, "ui", descriptor!));
 }

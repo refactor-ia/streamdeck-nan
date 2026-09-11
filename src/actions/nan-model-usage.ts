@@ -11,7 +11,7 @@ import {
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { renderNanModelUsageImage, type NanModelSettings } from "./nan-model-feedback.js";
-import { isImportChromeSessionMessage } from "./nan-chrome-import-message.js";
+import { createImportChromeSessionResult, parseImportChromeSessionMessage, type ImportChromeSessionRequest } from "./nan-chrome-import-message.js";
 
 export type NanModelUsageSettings = NanModelSettings;
 const GET_MODELS = "nan.modelUsage.getModels.v1";
@@ -55,8 +55,14 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, NanModelUsageSettings>): Promise<void> {
     if (!ev.action.isKey() || !this.isCurrent(ev.action)) return;
-    if (isImportChromeSessionMessage(ev.payload)) {
-      await this.dashboard.importChromeSession();
+    const importRequest = parseImportChromeSessionMessage(ev.payload);
+    if (importRequest) {
+      let outcome: "ready" | "failed" | "busy" = "failed";
+      try {
+        const result = await this.dashboard.importChromeSession();
+        outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+      } catch {}
+      await this.sendImportResult(ev.action, importRequest, outcome);
       return;
     }
     if (isModelsRequest(ev.payload)) {
@@ -88,6 +94,17 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
     const image = renderNanModelUsageImage(usage, entry.settings);
     if (this.visible.get(entry.action.id) !== entry) return;
     await entry.action.setImage(image);
+  }
+
+  private async sendImportResult(
+    action: KeyAction<NanModelUsageSettings>,
+    request: ImportChromeSessionRequest,
+    outcome: "ready" | "failed" | "busy",
+  ): Promise<void> {
+    if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id) return;
+    try {
+      await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+    } catch {}
   }
 
   private sendModels(action: KeyAction<NanModelUsageSettings>, usage: NanDashboardUsage): Promise<void> {

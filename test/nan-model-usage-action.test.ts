@@ -3,6 +3,7 @@ import test from "node:test";
 import { registerHooks } from "node:module";
 import { streamDeck, type KeyAction } from "@elgato/streamdeck";
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
+import { createImportChromeSessionResult } from "../src/actions/nan-chrome-import-message.js";
 
 const actionUrl = new URL("../src/actions/nan-model-usage.ts", import.meta.url);
 registerHooks({
@@ -102,6 +103,39 @@ test("model key imports only exact messages from its current visible Key and red
   assert.equal(dashboard.imports, 2);
 });
 
+test("model key correlates ready, failed, and busy imports without leaking data or replying to a stale inspector", async (t) => {
+  const dashboard = new ImportDashboard();
+  const sent: unknown[] = [];
+  const key = fakeKey("current");
+  replaceUi(t, { action: key, sendToPropertyInspector: async (payload: unknown) => { sent.push(payload); } });
+  const { NanModelUsage } = await loadNanModelUsage();
+  const subject = new NanModelUsage(dashboard);
+  await subject.onWillAppear({ action: key, payload: { settings: {} } } as never);
+
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "bad id" } } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "valid_1", extra: "sentinel-secret" } } as never);
+  assert.equal(dashboard.imports, 0, "malformed requests never acquire Chrome data");
+
+  dashboard.importResult = { state: "import-busy" };
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "busy_1" } } as never);
+  dashboard.importResult = { state: "import-unavailable" };
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "failed_1" } } as never);
+  dashboard.importResult = { state: "ready", quota: quotaUsage.quota };
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "ready_1" } } as never);
+  assert.deepEqual(sent, [
+    createImportChromeSessionResult("busy_1", "busy"),
+    createImportChromeSessionResult("failed_1", "failed"),
+    createImportChromeSessionResult("ready_1", "ready"),
+  ]);
+  assert.equal(JSON.stringify(sent).includes("sentinel-secret"), false);
+
+  (streamDeck.ui as unknown as { action: KeyAction }).action = fakeKey("reopened");
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "foreign_1" } } as never);
+  subject.onWillDisappear({ action: key } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "stale_1" } } as never);
+  assert.equal(sent.some((payload) => (payload as { requestId?: string }).requestId === "foreign_1" || (payload as { requestId?: string }).requestId === "stale_1"), false);
+});
+
 test("initial model request suppresses a payload after its inspector and appearance become stale", async (t) => {
   const usage = deferred<NanDashboardUsage>();
   const dashboard = new FakeDashboard(Promise.resolve(emptyUsage), usage.promise);
@@ -144,6 +178,7 @@ class FakeDashboard {
 class ImportDashboard {
   imports = 0;
   result: NanDashboardUsage = quotaUsage;
+  importResult: { state: "ready"; quota?: NanDashboardUsage["quota"] } | { state: "import-busy" | "import-unavailable" } = { state: "ready", quota: quotaUsage.quota };
   private readonly listeners = new Set<(usage: NanDashboardUsage) => void>();
 
   subscribe(listener: (usage: NanDashboardUsage) => void): () => void {
@@ -152,10 +187,10 @@ class ImportDashboard {
   }
   async getUsage(): Promise<NanDashboardUsage> { return emptyUsage; }
   getCachedUsage(): NanDashboardUsage { return emptyUsage; }
-  async importChromeSession(): Promise<{ state: "ready" | "import-unavailable"; quota?: NanDashboardUsage["quota"] }> {
+  async importChromeSession(): Promise<{ state: "ready"; quota?: NanDashboardUsage["quota"] } | { state: "import-busy" | "import-unavailable" }> {
     this.imports += 1;
     for (const listener of this.listeners) listener(this.result);
-    return this.result.error === "import-unavailable" ? { state: "import-unavailable" } : { state: "ready", quota: this.result.quota };
+    return this.importResult;
   }
 }
 

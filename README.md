@@ -51,7 +51,7 @@ The plugin is installed, but it still needs access to your NaN session before it
 3. Select that action in the app. In its configuration panel, click **Import session from Chrome**.
 4. Wait for usage data to appear. Touch the NaN Usage dial or press a keypad action to refresh it.
 
-You do not need to copy a cookie, token, or API key. Session import happens only when you request it; installing the plugin does not automatically sign you in.
+You do not need to copy a cookie, token, or API key. Session import happens only when you request it; installing the plugin does not automatically sign you in. The configuration panel disables **Import session from Chrome** while it waits, then shows a safe success, retry, or already-in-progress message. If it is still waiting after two minutes, the panel lets you retry; that message does not cancel the import already running in the plugin.
 
 <p align="center">
   <img src="docs/screenshots/nan-dial-actions.png" alt="NaN dial actions listed in the Stream Deck+ app" width="520">
