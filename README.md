@@ -76,6 +76,8 @@ You can also add **NaN Total Tokens** or **NaN Monthly Tokens** to regular keys.
 
 Download and open the latest installer, then confirm the update in Stream Deck. Updating from **v1.0.4 to v1.0.5** keeps the same action identifiers; you do not need to recreate those buttons or delete your saved NaN session for this fix.
 
+Action identifiers are stable by contract. The NaN Usage dial keeps its historical `com.refactor-ia.nan.nan-demo` UUID so existing configured buttons keep working after the demo-to-usage migration; contract tests pin it, so it must not be renamed.
+
 If you are upgrading from **v1.0.3 or earlier**, add the new actions again: v1.0.4 changed the plugin identity to Refactor IA. Old button placements are not migrated.
 
 ### If something does not work
