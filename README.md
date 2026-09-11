@@ -198,7 +198,8 @@ relay.
 ### Reporting Security Issues
 
 If you discover a security vulnerability, please report it privately. See
-[SECURITY.md](SECURITY.md) for details.
+[SECURITY.md](SECURITY.md) for details. Our data-handling practices are
+described in [PRIVACY.md](PRIVACY.md).
 
 ## Advanced Architecture and Status
 

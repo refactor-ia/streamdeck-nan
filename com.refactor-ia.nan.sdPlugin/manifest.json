@@ -5,10 +5,10 @@
   "Version": "1.0.7.0",
   "Author": "Refactor IA",
   "URL": "https://github.com/refactor-ia/streamdeck-nan",
-  "Description": "NaN Dashboard usage for Stream Deck+, with Claude, Codex, and experimental Grok integrations.",
+  "Description": "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Imports your NaN session securely from Chrome. Includes Claude, Codex and an experimental Grok monitor.",
   "Icon": "imgs/plugin/nan-dashboard",
   "Category": "NaN Dashboard",
-  "CategoryIcon": "imgs/plugin/nan-dashboard",
+  "CategoryIcon": "imgs/plugin/nan-category",
   "CodePath": "bin/plugin.js",
   "PropertyInspectorPath": "ui/property-inspector.html",
   "SDKVersion": 2,
@@ -81,7 +81,7 @@
     {
       "UUID": "com.refactor-ia.nan.nan-demo",
       "Name": "NaN Usage",
-      "Icon": "imgs/plugin/plugin-icon",
+      "Icon": "imgs/actions/nan-usage/nan-usage",
       "Tooltip": "Shows NaN Dashboard quota",
       "Controllers": [
         "Encoder"
@@ -163,5 +163,6 @@
   ],
   "Software": {
     "MinimumVersion": "7.1"
-  }
+  },
+  "SupportURL": "https://github.com/refactor-ia/streamdeck-nan/issues"
 }

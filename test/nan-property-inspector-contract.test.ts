@@ -97,10 +97,12 @@ test("NaN model and total keypad panels stay isolated from dial and refresh cont
 
 test("NaN Dashboard branding and launcher use migrated identities and external dials", () => {
   assert.equal(manifest.Name, "NaN Dashboard");
-  assert.equal(manifest.Description, "NaN Dashboard usage for Stream Deck+, with Claude, Codex, and experimental Grok integrations.");
+  assert.equal(manifest.Description, "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Imports your NaN session securely from Chrome. Includes Claude, Codex and an experimental Grok monitor.");
+  assert.equal(manifest.SupportURL, "https://github.com/refactor-ia/streamdeck-nan/issues");
+  assert.equal(manifest.CategoryIcon, "imgs/plugin/nan-category");
+  assert.equal(manifest.Actions.find((action) => action.UUID === "com.refactor-ia.nan.nan-demo").Icon, "imgs/actions/nan-usage/nan-usage");
   assert.equal(manifest.Category, "NaN Dashboard");
   assert.equal(manifest.Icon, "imgs/plugin/nan-dashboard");
-  assert.equal(manifest.CategoryIcon, "imgs/plugin/nan-dashboard");
   assert.equal(manifest.UUID, "com.refactor-ia.nan");
   assert.equal(manifest.Version, "1.0.7.0");
   assert.equal(manifest.CodePath, "bin/plugin.js");
@@ -240,4 +242,10 @@ test("NaN runtime images are RGBA PNGs at required dimensions and the editable s
   }
   const svg = readFileSync("design-assets/nan-brand/source/nan-isotipo-color.svg");
   assert.equal(createHash("sha256").update(svg).digest("hex"), "f8e143091605a69354a2f32c4688a32604ac9ed2f3f2df2744cd90ea29a75a45");
+  const whiteMono = (path: string) => {
+    const file = readFileSync(path, "utf8");
+    assert.equal(file, svg.toString().replaceAll("#7D39EB", "#FFFFFF"), `${path} must be the brand isotope with white monochrome stroke`);
+  };
+  whiteMono("com.refactor-ia.nan.sdPlugin/imgs/plugin/nan-category.svg");
+  whiteMono("com.refactor-ia.nan.sdPlugin/imgs/actions/nan-usage/nan-usage.svg");
 });
