@@ -104,7 +104,8 @@ test("NaN Dashboard branding and launcher use migrated identities and external d
   assert.equal(manifest.Category, "NaN Dashboard");
   assert.equal(manifest.Icon, "imgs/plugin/nan-dashboard");
   assert.equal(manifest.UUID, "com.refactor-ia.nan");
-  assert.equal(manifest.Version, "1.0.7.0");
+  assert.equal(manifest.Version, "1.0.8.0");
+  assert.equal(manifest.SDKVersion, 3);
   assert.equal(manifest.CodePath, "bin/plugin.js");
   assert.equal(manifest.PropertyInspectorPath, "ui/property-inspector.html");
   assert.equal(manifest.Nodejs.Version, "24");

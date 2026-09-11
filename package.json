@@ -1,6 +1,6 @@
 {
   "name": "streamdeck-nan",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "packageManager": "pnpm@11.13.0",
   "type": "module",

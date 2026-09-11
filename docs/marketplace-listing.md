@@ -39,6 +39,10 @@ NaN, AI usage, quota, tokens, Claude, Codex, Grok, Stream Deck+
 - Privacy policy: host `PRIVACY.md` and provide its public URL (GitHub blob URL is acceptable).
 - Support: <https://github.com/refactor-ia/streamdeck-nan/issues>
 
+## SDK 3 and DRM (resolved 2026-09-11)
+
+The Maker Console rejects submissions with `SDKVersion: 2` and DRM off. Per official docs, DRM requires the official `@elgato/streamdeck` library v2+ (we bundle 2.1.0), `SDKVersion: 3`, and `Software.MinimumVersion` 6.9+ (ours is 7.1). The manifest now declares `SDKVersion: 3`; DRM activation happens portal-side after upload and processing. DRM applies to the Marketplace copy; the GitHub-release `.streamDeckPlugin` remains unprotected by design.
+
 ## Open portal questions (verify at submission)
 
 - Exact review checklist and privacy requirements for plugins that read browser cookies (declare Chrome access explicitly and link the privacy policy).
