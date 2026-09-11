@@ -86,6 +86,40 @@ If you are upgrading from **v1.0.3 or earlier**, add the new actions again: v1.0
 
 Keep the saved session unless there is a specific reason to replace it; an empty model list alone does not identify the cause.
 
+### Dashboard recovery
+
+In published **v1.0.7**, the selected action's configuration panel has no import progress or result feedback. On `main` (for an upcoming release), it will show the feedback below. In either version, an import starts only when you explicitly click **Import session from Chrome**.
+
+**Dial recovery vocabulary** — **NaN Usage** on Stream Deck+ is the dial; keypad actions do not expose its full status vocabulary.
+
+| Where and message | What to do |
+| --- | --- |
+| NaN Usage dial — **IMPORT SESSION** | Select **NaN Usage** on a dial or one of the three supported data-display keypad actions described above, then explicitly click **Import session from Chrome** in its configuration panel. |
+| NaN Usage dial — **IMPORT BUSY** | Wait for the current import to finish, then refresh or retry. Do not start concurrent imports. |
+| NaN Usage dial — **IMPORT UNAVAILABLE** | Try the explicit import once more from the configuration panel. If it remains unavailable, report the visible message and versions; this message does not identify a specific browser condition. |
+| NaN Usage dial — **KEYCHAIN UNAVAILABLE** | Allow the applicable macOS Keychain permission when prompted, then retry. Do not disable macOS security or delete credentials to work around it. |
+| NaN Usage dial — **SESSION RESET FAILED** | Retry the refresh or explicit import. If it persists, report it; do not delete credentials as a repair step. |
+| NaN Usage dial — **QUOTA INVALID** | Refresh once. If it remains, report it as a dashboard-response/schema problem rather than reimporting or repairing credentials. |
+| NaN Usage dial — **DASHBOARD UNAVAILABLE** | Refresh later. A temporary dashboard failure can be retried. |
+| NaN Usage dial — **STALE** | The displayed quota is a previous value, not current data. Refresh before relying on it. |
+| NaN Total Tokens or NaN Monthly Tokens key — **METRICS ERROR** | Refresh later. Quota data can still be valid when metrics are unavailable. |
+| NaN Model Usage key — combined **NOT RETURNED** / **NO DATA** display | Click **Refresh models**, then select a model returned by the list. |
+| Keypad action — **NO DATA** or **DASHBOARD OFFLINE** | These messages can combine several underlying conditions and do not uniquely diagnose the problem. Use the relevant recovery step above or report the visible message. |
+
+**Upcoming property-inspector feedback** — While an import is pending, its button is disabled.
+
+| Visible message | Meaning and next step |
+| --- | --- |
+| Importing session from Chrome. Please wait. | The requested import is pending. |
+| Session imported. Usage will refresh shortly. | The session was imported. |
+| Import could not be completed. Check Chrome, then try again. | Retry after checking Chrome. |
+| Another import is already in progress. Please wait and try again. | Wait, then try again. |
+| Still waiting for the plugin. You can retry when ready. | The two-minute inspector watchdog has elapsed; it does not cancel any backend import. |
+| Unable to contact the plugin. Reopen this action and try again. | Reopen this action, then try again. |
+| Connection closed. Reopen this action to try again. | Reopen this action, then try again. |
+
+When reporting an issue, include the plugin and Stream Deck versions, the action, and the visible message. Do not include cookies, tokens, passwords, account data, or raw diagnostics.
+
 ## External Integrations and Requirements
 
 - **Claude Usage** requires Claude Code installed and signed in at `$HOME/.local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`, or `/usr/bin/claude`. It runs the official Claude CLI `/usage` command with tools disabled, then shows its session and weekly usage windows. The command must report zero turns, API duration, cost, and token usage.
