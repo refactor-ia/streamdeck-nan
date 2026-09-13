@@ -1,8 +1,8 @@
 import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
+import { THEME, chipHeader, gaugeFooter, text } from "./nan-theme.js";
 
 export type NanModelSettings = Partial<{ model: string }>;
 
-const COLORS = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" } as const;
 
 type Display = {
   readonly label: readonly string[];
@@ -10,6 +10,7 @@ type Display = {
   readonly secondary: string;
   readonly tertiary: string;
   readonly status: string;
+  readonly statusColor?: string;
   readonly accent: string;
   readonly gauge: number;
   readonly background?: string;
@@ -39,43 +40,36 @@ export function renderNanModelUsageSvg(state: NanDashboardUsage, settings: NanMo
         ? monthly(monthlyModel, state.metricsStale === true || state.stale)
         : !state.quota && !state.metrics
           ? unavailable(state.error)
-          : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", accent: COLORS.gold, gauge: 0 };
-  const warning = display.background !== undefined;
-  const foreground = display.foreground ?? COLORS.fg;
-  const gaugeY = warning ? 58 : 60;
-  const gaugeHeight = warning ? 2 : 3;
-  const gaugeRadius = warning ? 1 : 1.5;
-  const labels = display.label.map((line, index) => text(line, 6, display.label.length === 1 ? 16 : 11 + index * 8, foreground, 8)).join("");
-  const border = display.border ? `<rect x="2" y="2" width="68" height="68" rx="4" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
+          : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
+  const foreground = display.foreground ?? THEME.fg;
+  const [firstLabel = "", secondLabel = ""] = display.label;
+  const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${display.background ?? COLORS.bg}"/>${border}<rect x="6" y="4" width="60" height="1" fill="${warning ? foreground : COLORS.blue}"/>
-${labels}${text(display.primary, 6, 38, display.accent, 16)}${text(display.secondary, 6, 48, foreground, 7)}${text(display.tertiary, 6, 56, foreground, 7)}
-<rect x="6" y="${gaugeY}" width="60" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.gaugeTrack ?? "#202633"}"/><rect x="6" y="${gaugeY}" width="${display.gauge.toFixed(2)}" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.accent}"/>
-${text(display.status || "LIVE", 6, warning ? 67 : 70, warning ? foreground : display.status ? COLORS.rose : COLORS.green, 7)}</svg>`;
+<rect width="72" height="72" rx="6" fill="${display.background ?? THEME.bg}"/>${border}${chipHeader(firstLabel, foreground)}${text(secondLabel, 6, 19, foreground, 6)}
+${text(display.primary, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.secondary, 6, 46, foreground, 5.5)}${text(display.tertiary, 6, 52, foreground, 5.5, { opacity: 0.6 })}
+${gaugeFooter(display.gauge, display.accent, display.status, display.statusColor ?? display.accent, display.gaugeTrack ?? THEME.track)}</svg>`;
 }
 
 function pendingSelection(): Display {
-  return { label: ["CHOOSE MODEL"], primary: "--", secondary: "USE INSPECTOR", tertiary: "", status: "", accent: COLORS.blue, gauge: 0 };
+  return { label: ["MODEL"], primary: "--", secondary: "CHOOSE MODEL", tertiary: "IN SETTINGS", status: "SETUP", statusColor: THEME.violetSoft, accent: THEME.muted, gauge: 0 };
 }
 
 function capped(model: { model: string; tokensUsed: number; cap: number; percentage: number; resetAt: string | null; windowHours: number | null }, stale: boolean): Display {
-  const warning = model.percentage > 90
-    ? { background: "#9D1020", foreground: "#FFF5F6", gaugeTrack: "#3B060D" }
-    : model.percentage > 80
-      ? { background: "#FFC247", foreground: "#161616", gaugeTrack: "#6C4500" }
-      : undefined;
+  const limit = model.percentage > 90;
+  const amber = !limit && (model.percentage > 80 || stale);
   return {
     label: labelLines(model.model),
     primary: `${formatPercentage(model.percentage)}%`,
     secondary: `USED ${compact(model.tokensUsed)}`,
     tertiary: `CAP ${compact(model.cap)} · ${period(model)}`,
-    status: stale ? "STALE" : "",
-    accent: warning?.foreground ?? (stale ? COLORS.gold : COLORS.green),
+    status: stale ? "STALE" : limit ? "LIMIT" : "",
+    statusColor: limit ? "#ffffff" : THEME.warn,
+    accent: limit ? "#ffffff" : amber ? THEME.warn : THEME.ok,
     gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
-    background: warning?.background,
-    border: warning?.foreground,
-    foreground: warning?.foreground,
-    gaugeTrack: warning?.gaugeTrack,
+    background: limit ? THEME.dangerBg : undefined,
+    border: limit ? THEME.danger : undefined,
+    foreground: limit ? "#ffffff" : undefined,
+    gaugeTrack: limit ? THEME.dangerTrack : undefined,
   };
 }
 
@@ -90,7 +84,8 @@ function uncapped(model: { model: string; tokensUsed: number; resetAt: string | 
     secondary: "UNCAPPED",
     tertiary: period(model),
     status: stale ? "STALE" : "",
-    accent: stale ? COLORS.gold : COLORS.green,
+    statusColor: THEME.warn,
+    accent: stale ? THEME.warn : THEME.ok,
     gauge: 0,
   };
 }
@@ -102,7 +97,8 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
     secondary: "MONTH TOKENS",
     tertiary: `MTD · IN ${compact(model.inputTokens)} OUT ${compact(model.outputTokens)}`,
     status: stale ? "STALE" : "",
-    accent: stale ? COLORS.gold : COLORS.green,
+    statusColor: THEME.warn,
+    accent: stale ? THEME.warn : THEME.violetSoft,
     gauge: 0,
   };
 }
@@ -110,7 +106,8 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
 function unavailable(error: NanDashboardUsage["error"]): Display {
   const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
   const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
-  return { label: ["NaN DASHBOARD"], primary: "--", secondary, tertiary: "", status, accent: status === "ERROR" ? COLORS.rose : COLORS.gold, gauge: 0 };
+  const accent = status === "ERROR" ? THEME.danger : THEME.warn;
+  return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
 }
 
 function period(model: { resetAt: string | null; windowHours: number | null }): string {
@@ -134,12 +131,8 @@ function labelLines(value: string): readonly string[] {
   return [first, rest.length > 12 ? `${rest.slice(0, 11)}…` : rest];
 }
 
-function text(value: string, x: number, y: number, fill: string, size: number): string {
-  return value ? `<text x="${x}" y="${y}" fill="${fill}" font-family="Arial,sans-serif" font-size="${size}" font-weight="700">${escapeXml(value)}</text>` : "";
-}
 
 const UTC_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
 function compact(value: number): string { return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function formatPercentage(value: number): string { return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, ""); }
 function validModel(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.length <= 128 && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value); }
-function escapeXml(value: string): string { return value.replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character]!); }

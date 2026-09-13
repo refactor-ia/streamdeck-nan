@@ -10027,7 +10027,7 @@ class NanSettingsWriteQueue {
 function renderNanDashboardFeedback(state, settings) {
     const base = { title: "NaN", demo: "DASHBOARD" };
     if (!state.quota) {
-        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", status: dashboardStatus(state.error) };
+        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state.error) };
     }
     const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
     if (selected) {
@@ -10038,18 +10038,19 @@ function renderNanDashboardFeedback(state, settings) {
             ...base,
             model: model.model,
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
-            // Preserve the raw API percentage (including over-cap values); there is no dial bar to clamp here.
+            // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
             unit: `${formatPercentage$1(model.percentage)}% · ${period}`,
+            indicator: Math.min(100, Math.max(0, model.percentage)),
             status: state.stale ? "STALE" : "",
         };
     }
     const uncapped = state.quota.uncappedModels[0];
     if (uncapped)
-        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", status: state.stale ? "STALE" : "" };
-    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", status: "NO QUOTA" };
+        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
+    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
 }
 function renderNanImportProgress() {
-    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", status: "IMPORTING" };
+    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "IMPORTING" };
 }
 function dashboardStatus(error) {
     switch (error) {
@@ -12683,7 +12684,45 @@ let NanDemoUsage = (() => {
     return _classThis;
 })();
 
-const COLORS$1 = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" };
+/** Shared NaN brand theme for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
+const THEME = {
+    bg: "#0e0c14",
+    fg: "#f3f1f8",
+    muted: "#9a93ab",
+    track: "#231f30",
+    violet: "#7d39eb",
+    violetSoft: "#b48cff",
+    ok: "#7ed49c",
+    warn: "#ffc247",
+    danger: "#ff5c6c",
+    dangerBg: "#7a0f1c",
+    dangerTrack: "rgba(0,0,0,0.25)",
+};
+const KEY_FONT = "'Helvetica Neue',Helvetica,Arial,sans-serif";
+/** Renders one bold SVG text run; an empty value renders nothing. */
+function text(value, x, y, fill, size, options = {}) {
+    if (!value)
+        return "";
+    const anchor = options.anchor === "end" ? ' text-anchor="end"' : "";
+    const opacity = options.opacity !== undefined ? ` opacity="${options.opacity}"` : "";
+    const spacing = options.letterSpacing ? ` letter-spacing="${options.letterSpacing}"` : "";
+    return `<text x="${x}" y="${y}" fill="${fill}" font-family="${KEY_FONT}" font-size="${size}" font-weight="700"${anchor}${opacity}${spacing}>${escapeXml(value)}</text>`;
+}
+/** Brand chip: violet rounded tag with a white "NaN" wordmark, plus the following tile title on the same baseline. */
+function chipHeader(title, fg, chipFill = THEME.violet) {
+    return `<rect x="6" y="5" width="16" height="7" rx="2" fill="${chipFill}"/>${text("NaN", 8, 10.5, "#ffffff", 5)}${text(title, 25, 11, fg, 6)}`;
+}
+/** Gauge track (plus optional fill) and the trailing live dot or status text. */
+function gaugeFooter(gaugeWidth, fillColor, status, statusColor, trackColor) {
+    const trackWidth = status ? 42 : 52;
+    const fill = gaugeWidth > 0 ? `<rect x="6" y="62" width="${Math.min(trackWidth, gaugeWidth * trackWidth / 60).toFixed(2)}" height="3" rx="1.5" fill="${fillColor}"/>` : "";
+    const trailer = status ? text(status, 66, 65, statusColor, 5, { anchor: "end" }) : `<circle cx="63" cy="63.5" r="1.5" fill="${THEME.ok}"/>`;
+    return `<rect x="6" y="62" width="${trackWidth}" height="3" rx="1.5" fill="${trackColor}"/>${fill}${trailer}`;
+}
+function escapeXml(value) {
+    return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character]);
+}
+
 /** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
 function renderNanModelUsageImage(state, settings) {
     return `data:image/svg+xml,${encodeURIComponent(renderNanModelUsageSvg(state, settings))}`;
@@ -12704,41 +12743,34 @@ function renderNanModelUsageSvg(state, settings) {
                 ? monthly(monthlyModel, state.metricsStale === true || state.stale)
                 : !state.quota && !state.metrics
                     ? unavailable(state.error)
-                    : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", accent: COLORS$1.gold, gauge: 0 };
-    const warning = display.background !== undefined;
-    const foreground = display.foreground ?? COLORS$1.fg;
-    const gaugeY = warning ? 58 : 60;
-    const gaugeHeight = warning ? 2 : 3;
-    const gaugeRadius = warning ? 1 : 1.5;
-    const labels = display.label.map((line, index) => text$1(line, 6, display.label.length === 1 ? 16 : 11 + index * 8, foreground, 8)).join("");
-    const border = display.border ? `<rect x="2" y="2" width="68" height="68" rx="4" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
+                    : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
+    const foreground = display.foreground ?? THEME.fg;
+    const [firstLabel = "", secondLabel = ""] = display.label;
+    const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
     return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${display.background ?? COLORS$1.bg}"/>${border}<rect x="6" y="4" width="60" height="1" fill="${warning ? foreground : COLORS$1.blue}"/>
-${labels}${text$1(display.primary, 6, 38, display.accent, 16)}${text$1(display.secondary, 6, 48, foreground, 7)}${text$1(display.tertiary, 6, 56, foreground, 7)}
-<rect x="6" y="${gaugeY}" width="60" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.gaugeTrack ?? "#202633"}"/><rect x="6" y="${gaugeY}" width="${display.gauge.toFixed(2)}" height="${gaugeHeight}" rx="${gaugeRadius}" fill="${display.accent}"/>
-${text$1(display.status || "LIVE", 6, warning ? 67 : 70, warning ? foreground : display.status ? COLORS$1.rose : COLORS$1.green, 7)}</svg>`;
+<rect width="72" height="72" rx="6" fill="${display.background ?? THEME.bg}"/>${border}${chipHeader(firstLabel, foreground)}${text(secondLabel, 6, 19, foreground, 6)}
+${text(display.primary, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.secondary, 6, 46, foreground, 5.5)}${text(display.tertiary, 6, 52, foreground, 5.5, { opacity: 0.6 })}
+${gaugeFooter(display.gauge, display.accent, display.status, display.statusColor ?? display.accent, display.gaugeTrack ?? THEME.track)}</svg>`;
 }
 function pendingSelection() {
-    return { label: ["CHOOSE MODEL"], primary: "--", secondary: "USE INSPECTOR", tertiary: "", status: "", accent: COLORS$1.blue, gauge: 0 };
+    return { label: ["MODEL"], primary: "--", secondary: "CHOOSE MODEL", tertiary: "IN SETTINGS", status: "SETUP", statusColor: THEME.violetSoft, accent: THEME.muted, gauge: 0 };
 }
 function capped(model, stale) {
-    const warning = model.percentage > 90
-        ? { background: "#9D1020", foreground: "#FFF5F6", gaugeTrack: "#3B060D" }
-        : model.percentage > 80
-            ? { background: "#FFC247", foreground: "#161616", gaugeTrack: "#6C4500" }
-            : undefined;
+    const limit = model.percentage > 90;
+    const amber = !limit && (model.percentage > 80 || stale);
     return {
         label: labelLines(model.model),
         primary: `${formatPercentage(model.percentage)}%`,
         secondary: `USED ${compact$1(model.tokensUsed)}`,
         tertiary: `CAP ${compact$1(model.cap)} · ${period(model)}`,
-        status: stale ? "STALE" : "",
-        accent: warning?.foreground ?? (stale ? COLORS$1.gold : COLORS$1.green),
+        status: stale ? "STALE" : limit ? "LIMIT" : "",
+        statusColor: limit ? "#ffffff" : THEME.warn,
+        accent: limit ? "#ffffff" : amber ? THEME.warn : THEME.ok,
         gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
-        background: warning?.background,
-        border: warning?.foreground,
-        foreground: warning?.foreground,
-        gaugeTrack: warning?.gaugeTrack,
+        background: limit ? THEME.dangerBg : undefined,
+        border: limit ? THEME.danger : undefined,
+        foreground: limit ? "#ffffff" : undefined,
+        gaugeTrack: limit ? THEME.dangerTrack : undefined,
     };
 }
 function isCapped(value) {
@@ -12751,7 +12783,8 @@ function uncapped(model, stale) {
         secondary: "UNCAPPED",
         tertiary: period(model),
         status: stale ? "STALE" : "",
-        accent: stale ? COLORS$1.gold : COLORS$1.green,
+        statusColor: THEME.warn,
+        accent: stale ? THEME.warn : THEME.ok,
         gauge: 0,
     };
 }
@@ -12762,14 +12795,16 @@ function monthly(model, stale) {
         secondary: "MONTH TOKENS",
         tertiary: `MTD · IN ${compact$1(model.inputTokens)} OUT ${compact$1(model.outputTokens)}`,
         status: stale ? "STALE" : "",
-        accent: stale ? COLORS$1.gold : COLORS$1.green,
+        statusColor: THEME.warn,
+        accent: stale ? THEME.warn : THEME.violetSoft,
         gauge: 0,
     };
 }
 function unavailable(error) {
     const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
     const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
-    return { label: ["NaN DASHBOARD"], primary: "--", secondary, tertiary: "", status, accent: status === "ERROR" ? COLORS$1.rose : COLORS$1.gold, gauge: 0 };
+    const accent = status === "ERROR" ? THEME.danger : THEME.warn;
+    return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
 }
 function period(model) {
     const details = [];
@@ -12794,14 +12829,10 @@ function labelLines(value) {
     const rest = value.slice(firstEnd);
     return [first, rest.length > 12 ? `${rest.slice(0, 11)}…` : rest];
 }
-function text$1(value, x, y, fill, size) {
-    return value ? `<text x="${x}" y="${y}" fill="${fill}" font-family="Arial,sans-serif" font-size="${size}" font-weight="700">${escapeXml$1(value)}</text>` : "";
-}
 const UTC_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 function compact$1(value) { return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function formatPercentage(value) { return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, ""); }
 function validModel(value) { return typeof value === "string" && value.length > 0 && value.length <= 128 && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value); }
-function escapeXml$1(value) { return value.replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character]); }
 
 const GET_MODELS = "nan.modelUsage.getModels.v1";
 const REFRESH_MODELS = "nan.modelUsage.refreshModels.v1";
@@ -12933,38 +12964,30 @@ function isExactKind(payload, kind) {
     return typeof payload === "object" && payload !== null && Object.keys(payload).length === 1 && payload.kind === kind;
 }
 
-const COLORS = { bg: "#06080f", fg: "#f3f6f9", blue: "#7fb4ca", gold: "#dfbd76", green: "#b7cc85", rose: "#cb7c94" };
 /** Renders server-authoritative aggregate tokens on the standard 72px keypad canvas. */
 function renderNanMetricsUsageImage(state, period) {
     return `data:image/svg+xml,${encodeURIComponent(renderNanMetricsUsageSvg(state, period))}`;
 }
 function renderNanMetricsUsageSvg(state, period) {
     const display = metricsDisplay(state, period);
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN ${display.title.toLowerCase()}">
-  <rect width="72" height="72" rx="6" fill="${COLORS.bg}"/><rect x="6" y="4" width="60" height="1" fill="${COLORS.blue}"/>
-  ${text("NaN", 6, 16, COLORS.fg, 9)}${text(display.title, 6, 26, COLORS.fg, 8)}
-  ${text(display.value, 6, 45, display.accent, 18)}${text(display.unit, 6, 56, COLORS.fg, 7)}
-  <rect x="6" y="61" width="60" height="2" rx="1" fill="#202633"/>${text(display.status || "LIVE", 6, 70, display.status ? COLORS.rose : COLORS.green, 7)}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN ${display.title.toLowerCase()} tokens">
+<rect width="72" height="72" rx="6" fill="${THEME.bg}"/>${chipHeader(display.title, THEME.fg)}
+${text(display.value, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.unit, 6, 46, THEME.fg, 5.5)}${text(display.period, 6, 52, THEME.fg, 5.5, { opacity: 0.6 })}
+${gaugeFooter(0, display.accent, display.status, display.accent, THEME.track)}</svg>`;
 }
 function metricsDisplay(state, period) {
-    const title = period === "allTime" ? "TOTAL TOKENS" : "MONTHLY TOKENS";
-    const unit = period === "allTime" ? "ALL TIME · TOKENS" : "MONTH TO DATE · TOKENS";
+    const title = period === "allTime" ? "TOTAL" : "MONTHLY";
+    const label = period === "allTime" ? "ALL TIME" : "MONTH TO DATE";
     const window = state.metrics?.[period];
     if (!window) {
         const status = state.metricsError ? "METRICS ERROR" : "NO DATA";
-        return { title, value: "--", unit: "DASHBOARD METRICS", status, accent: status === "METRICS ERROR" ? COLORS.rose : COLORS.gold };
+        return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
     }
     const stale = state.stale || state.metricsStale === true;
-    return { title, value: compact(window.totalTokens), unit, status: stale ? "STALE" : "", accent: stale ? COLORS.gold : COLORS.blue };
+    return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.warn : THEME.violetSoft };
 }
 function compact(value) {
     return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-function text(value, x, y, fill, size) {
-    return `<text x="${x}" y="${y}" fill="${fill}" font-family="Arial,sans-serif" font-size="${size}" font-weight="700">${escapeXml(value)}</text>`;
-}
-function escapeXml(value) {
-    return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character]);
 }
 
 /** Shared keypad lifecycle for server aggregate metrics; it never creates a per-key timer. */

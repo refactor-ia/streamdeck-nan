@@ -5,54 +5,119 @@
     {
       "key": "title",
       "type": "text",
-      "rect": [8, 3, 60, 22],
+      "rect": [
+        8,
+        4,
+        60,
+        24
+      ],
       "alignment": "left",
-      "font": { "size": 18, "weight": 800 },
-      "value": "NaN"
+      "font": {
+        "size": 18,
+        "weight": 800
+      },
+      "value": "NaN",
+      "color": "#f3f1f8"
     },
     {
       "key": "demo",
       "type": "text",
-      "rect": [72, 5, 120, 18],
+      "rect": [
+        72,
+        8,
+        120,
+        16
+      ],
       "alignment": "right",
-      "color": "#f5a623",
-      "font": { "size": 10, "weight": 800 },
-      "value": "DASHBOARD"
+      "font": {
+        "size": 9,
+        "weight": 800
+      },
+      "value": "DASHBOARD",
+      "color": "#9a93ab"
     },
     {
       "key": "model",
       "type": "text",
-      "rect": [8, 31, 184, 18],
+      "rect": [
+        8,
+        30,
+        184,
+        16
+      ],
       "alignment": "left",
-      "color": "#b9c9ff",
-      "font": { "size": 11, "weight": 800 },
-      "value": "Dashboard"
+      "font": {
+        "size": 11,
+        "weight": 800
+      },
+      "value": "Dashboard",
+      "color": "#9a93ab"
     },
     {
       "key": "value",
       "type": "text",
-      "rect": [8, 52, 184, 28],
+      "rect": [
+        8,
+        46,
+        184,
+        28
+      ],
       "alignment": "center",
-      "font": { "size": 22, "weight": 800 },
-      "value": "--"
+      "font": {
+        "size": 22,
+        "weight": 800
+      },
+      "value": "--",
+      "color": "#f3f1f8"
     },
     {
       "key": "unit",
       "type": "text",
-      "rect": [8, 80, 184, 10],
-      "alignment": "center",
-      "color": "#b9c9ff",
-      "font": { "size": 8, "weight": 800 },
-      "value": "PROVIDER QUOTA"
+      "rect": [
+        8,
+        74,
+        120,
+        12
+      ],
+      "alignment": "left",
+      "font": {
+        "size": 8,
+        "weight": 800
+      },
+      "value": "PROVIDER QUOTA",
+      "color": "#9a93ab"
     },
     {
       "key": "status",
       "type": "text",
-      "rect": [8, 91, 184, 8],
+      "rect": [
+        128,
+        74,
+        64,
+        12
+      ],
       "alignment": "right",
-      "color": "#f5a623",
-      "font": { "size": 7, "weight": 800 },
-      "value": "IMPORT SESSION"
+      "font": {
+        "size": 8,
+        "weight": 800
+      },
+      "value": "IMPORT SESSION",
+      "color": "#9a93ab"
+    },
+    {
+      "key": "indicator",
+      "type": "bar",
+      "rect": [
+        8,
+        90,
+        184,
+        7
+      ],
+      "bar_bg_c": "#231f30",
+      "bar_fill_c": "#7ed49c",
+      "border_w": 0,
+      "subtype": 0,
+      "value": 0
     }
   ]
 }

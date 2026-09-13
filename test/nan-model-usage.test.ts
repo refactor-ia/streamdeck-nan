@@ -28,43 +28,59 @@ function renderedBackground(svg: string): string {
   return svg.match(/<rect width="72" height="72" rx="6" fill="(#[A-Fa-f0-9]+)"\/>/)![1]!;
 }
 
-test("capped models choose normal, amber, and red tiers from their raw unrounded percentage", () => {
+const BG = "#0e0c14";
+const OK = "#7ed49c";
+const WARN = "#ffc247";
+const LIMIT_BG = "#7a0f1c";
+const LIMIT_FG = "#ffffff";
+const LIMIT_FRAME = "#ff5c6c";
+const FRAME = /<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="(#[A-Fa-f0-9]+)" stroke-width="3"\/>/;
+
+test("capped models choose normal, amber, and limit tiers from their raw unrounded percentage", () => {
   for (const [percentage, displayed, background, foreground, frame] of [
-    [79.99, "80", "#06080f", "#b7cc85", undefined],
-    [80, "80", "#06080f", "#b7cc85", undefined],
-    [80.01, "80", "#FFC247", "#161616", "#161616"],
-    [90, "90", "#FFC247", "#161616", "#161616"],
-    [90.01, "90", "#9D1020", "#FFF5F6", "#FFF5F6"],
-    [91, "91", "#9D1020", "#FFF5F6", "#FFF5F6"],
-    [100, "100", "#9D1020", "#FFF5F6", "#FFF5F6"],
-    [125, "125", "#9D1020", "#FFF5F6", "#FFF5F6"],
+    [79.99, "80", BG, OK, undefined],
+    [80, "80", BG, OK, undefined],
+    [80.01, "80", BG, WARN, undefined],
+    [90, "90", BG, WARN, undefined],
+    [90.01, "90", LIMIT_BG, LIMIT_FG, LIMIT_FRAME],
+    [91, "91", LIMIT_BG, LIMIT_FG, LIMIT_FRAME],
+    [100, "100", LIMIT_BG, LIMIT_FG, LIMIT_FRAME],
+    [125, "125", LIMIT_BG, LIMIT_FG, LIMIT_FRAME],
   ] as const) {
     const svg = cappedSvg(percentage);
     assert.equal(renderedBackground(svg), background);
     assert.match(svg, new RegExp(`>${displayed}%<\\/text>`));
-    assert.match(svg, new RegExp(`<text x="6" y="38" fill="${foreground}"`));
-    if (frame) assert.match(svg, new RegExp(`<rect x="2" y="2" width="68" height="68" rx="4" fill="none" stroke="${frame}" stroke-width="3"\\/>`));
+    assert.match(svg, new RegExp(`<text x="6" y="37" fill="${foreground}"`));
+    if (frame) assert.equal(svg.match(FRAME)?.[1], frame);
     else assert.doesNotMatch(svg, /stroke-width="3"/);
   }
 });
 
 test("warning tiers retain content, use approved geometry, and clamp their visible gauges", () => {
-  for (const [percentage, foreground, width] of [[80.01, "#161616", "48.01"], [90, "#161616", "54.00"], [91, "#FFF5F6", "54.60"], [100, "#FFF5F6", "60.00"], [125, "#FFF5F6", "60.00"]] as const) {
+  for (const [percentage, foreground, track, width, status] of [
+    [80.01, WARN, "#231f30", "41.61", ""],
+    [90, WARN, "#231f30", "46.80", ""],
+    [91, LIMIT_FG, "rgba(0,0,0,0.25)", "38.22", "LIMIT"],
+    [100, LIMIT_FG, "rgba(0,0,0,0.25)", "42.00", "LIMIT"],
+    [125, LIMIT_FG, "rgba(0,0,0,0.25)", "42.00", "LIMIT"],
+  ] as const) {
     const svg = cappedSvg(percentage);
+    const trackWidth = status ? 42 : 52;
     assert.match(svg, /width="72" height="72" viewBox="0 0 72 72"/);
     assert.match(svg, />USED 125K<\/text>/);
     assert.match(svg, />CAP 100K · OCT 1<\/text>/);
-    assert.match(svg, new RegExp(`<rect x="6" y="58" width="60" height="2" rx="1" fill="#[A-Fa-f0-9]+"\\/><rect x="6" y="58" width="${width}" height="2" rx="1" fill="${foreground}"\\/>`));
-    assert.match(svg, new RegExp(`<text x="6" y="67" fill="${foreground}"`));
+    assert.ok(svg.includes(`<rect x="6" y="62" width="${trackWidth}" height="3" rx="1.5" fill="${track}"/><rect x="6" y="62" width="${width}" height="3" rx="1.5" fill="${foreground}"/>`), `gauge geometry for ${percentage}`);
+    if (status) assert.match(svg, new RegExp(`<text x="66" y="65" fill="${foreground}"[^>]*text-anchor="end"[^>]*>${status}<\\/text>`));
+    else assert.match(svg, /<circle cx="63" cy="63.5" r="1.5" fill="#7ed49c"\/>/);
     assert.doesNotMatch(svg, /WARNING/);
   }
 });
 
-test("stale amber and red tiers retain a legible palette-adapted status", () => {
-  for (const [percentage, background, foreground] of [[80.01, "#FFC247", "#161616"], [91, "#9D1020", "#FFF5F6"]] as const) {
+test("stale amber and limit tiers retain a legible status", () => {
+  for (const [percentage, background, foreground] of [[80.01, BG, WARN], [91, LIMIT_BG, LIMIT_FG]] as const) {
     const svg = cappedSvg(percentage, true);
     assert.equal(renderedBackground(svg), background);
-    assert.match(svg, new RegExp(`<text x="6" y="67" fill="${foreground}"[^>]*>STALE<\\/text>`));
+    assert.match(svg, new RegExp(`<text x="66" y="65" fill="${foreground}"[^>]*>STALE<\\/text>`));
     assert.ok(contrast(foreground, renderedBackground(svg)) >= 4.5, `stale ${percentage} status must meet text contrast`);
   }
 });
@@ -72,24 +88,23 @@ test("stale amber and red tiers retain a legible palette-adapted status", () => 
 test("warning rendering uses actual SVG foreground and frame colors with sufficient contrast", () => {
   for (const svg of [cappedSvg(80.01), cappedSvg(91)]) {
     const background = renderedBackground(svg);
-    const foreground = svg.match(/<text x="6" y="38" fill="(#[A-Fa-f0-9]+)"/)![1]!;
-    const frame = svg.match(/<rect x="2" y="2" width="68" height="68" rx="4" fill="none" stroke="(#[A-Fa-f0-9]+)"/)![1]!;
+    const foreground = svg.match(/<text x="6" y="37" fill="(#[A-Fa-f0-9]+)"/)![1]!;
     assert.ok(contrast(foreground, background) >= 4.5, `${foreground} must meet text contrast`);
-    assert.ok(contrast(frame, background) >= 3, `${frame} must meet frame contrast`);
   }
+  assert.ok(contrast(cappedSvg(91).match(FRAME)![1]!, LIMIT_BG) >= 3, "limit frame must meet frame contrast");
 });
 
-test("red, amber, and normal renders transition without retaining warning presentation", () => {
-  const red = cappedSvg(91);
+test("limit, amber, and normal renders transition without retaining warning presentation", () => {
+  const limit = cappedSvg(91);
   const amber = cappedSvg(90);
   const normal = cappedSvg(80);
-  assert.equal(renderedBackground(red), "#9D1020");
-  assert.equal(renderedBackground(amber), "#FFC247");
-  assert.equal(renderedBackground(normal), "#06080f");
-  assert.match(normal, /<rect x="6" y="4" width="60" height="1" fill="#7fb4ca"\/>/);
-  assert.match(normal, /<rect x="6" y="60" width="60" height="3" rx="1.5" fill="#202633"\/>/);
-  assert.match(normal, /<text x="6" y="70" fill="#b7cc85"[^>]*>LIVE<\/text>/);
-  assert.doesNotMatch(normal, /stroke-width="3"|y="58"/);
+  assert.equal(renderedBackground(limit), LIMIT_BG);
+  assert.equal(renderedBackground(amber), BG);
+  assert.equal(renderedBackground(normal), BG);
+  assert.match(normal, /<rect x="6" y="5" width="16" height="7" rx="2" fill="#7d39eb"\/>/);
+  assert.match(normal, /<rect x="6" y="62" width="52" height="3" rx="1.5" fill="#231f30"\/>/);
+  assert.match(normal, /<circle cx="63" cy="63.5" r="1.5" fill="#7ed49c"\/>/);
+  assert.doesNotMatch(normal, /stroke-width="3"|LIVE|LIMIT/);
 });
 
 test("warning styling does not affect stale normal, uncapped, metrics-only, unselected, unavailable, or import routes", () => {
@@ -104,10 +119,10 @@ test("warning styling does not affect stale normal, uncapped, metrics-only, unse
   const metricsOnly = renderNanModelUsageSvg({ source: "dashboard", metrics, stale: false }, { model: "metrics-only" });
   const unavailable = renderNanModelUsageSvg({ source: "dashboard", stale: false }, { model: "qwen3.8-flash" });
   const importing = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" });
-  assert.match(staleNormal, /<text x="6" y="70" fill="#cb7c94"[^>]*>STALE<\/text>/);
+  assert.match(staleNormal, /<text x="66" y="65" fill="#ffc247"[^>]*>STALE<\/text>/);
   for (const svg of [staleNormal, uncapped, unselected, metricsOnly, unavailable, importing]) {
-    assert.equal(renderedBackground(svg), "#06080f");
-    assert.doesNotMatch(svg, /stroke-width="3"|y="58"/);
+    assert.equal(renderedBackground(svg), BG);
+    assert.doesNotMatch(svg, /stroke-width="3"|LIMIT/);
   }
   assert.match(uncapped, /UNCAPPED/);
   assert.match(metricsOnly, /MONTH TOKENS/);
@@ -122,8 +137,8 @@ test("model key gives over-cap consumption its own readable percentage, raw band
   assert.match(svg, />125%<\/text>/);
   assert.match(svg, />USED 125K<\/text>/);
   assert.match(svg, />CAP 100K · OCT 1<\/text>/);
-  assert.match(svg, /width="60"/);
-  assert.match(svg, /fill="#FFF5F6"/);
+  assert.match(svg, /width="42.00"/);
+  assert.match(svg, /fill="#ffffff"/);
   assert.doesNotMatch(svg, /NaN MODEL/);
   assert.equal(renderNanModelUsageImage(state, { model: "qwen3.8-flash" }).startsWith("data:image/svg+xml,"), true);
 });
@@ -139,6 +154,8 @@ test("model key uses actual reset plus rolling metadata and never invents an una
 test("model key distinguishes unconfigured, missing, uncapped, stale, and import states without a fake percentage", () => {
   const ready: NanDashboardUsage = { source: "dashboard", quota, stale: false };
   assert.match(renderNanModelUsageSvg(ready, {}), /CHOOSE MODEL/);
+  assert.match(renderNanModelUsageSvg(ready, {}), /IN SETTINGS/);
+  assert.match(renderNanModelUsageSvg(ready, {}), /<text x="66" y="65" fill="#b48cff"[^>]*>SETUP<\/text>/);
   assert.match(renderNanModelUsageSvg(ready, { model: "removed" }), /NO DATA/);
   const uncapped = renderNanModelUsageSvg(ready, { model: "uncapped-qwen" });
   assert.match(uncapped, />42K<\/text>/);
@@ -181,6 +198,6 @@ test("key SVG is a full 72px canvas with bounded readable text and escaped two-l
   assert.match(svg, /x="6"/);
   assert.match(svg, /Qwen &lt;&amp;&gt; /);
   assert.match(svg, /…<\/text>/);
-  assert.doesNotMatch(svg, /font-size="[0-6]"/);
+  assert.doesNotMatch(svg, /font-size="[0-4](?:\.\d+)?"/);
   assert.doesNotMatch(svg, /<text[^>]*>Qwen <&>/);
 });

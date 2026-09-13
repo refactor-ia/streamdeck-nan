@@ -5,34 +5,65 @@
     {
       "key": "title",
       "type": "text",
-      "rect": [8, 3, 130, 22],
+      "rect": [
+        8,
+        4,
+        120,
+        24
+      ],
       "alignment": "left",
-      "font": { "size": 17, "weight": 800 },
-      "value": "CLAUDE"
+      "font": {
+        "size": 18,
+        "weight": 800
+      },
+      "value": "CLAUDE",
+      "color": "#f3f1f8"
     },
     {
       "key": "status",
       "type": "text",
-      "rect": [140, 5, 52, 18],
+      "rect": [
+        130,
+        8,
+        62,
+        16
+      ],
       "alignment": "right",
-      "color": "#f5a623",
-      "font": { "size": 10, "weight": 800 },
-      "value": ""
+      "font": {
+        "size": 9,
+        "weight": 800
+      },
+      "value": "",
+      "color": "#9a93ab"
     },
     {
       "key": "sessionLabel",
       "type": "text",
-      "rect": [8, 32, 30, 22],
+      "rect": [
+        8,
+        34,
+        34,
+        22
+      ],
       "alignment": "left",
-      "font": { "size": 15, "weight": 800 },
-      "value": "5H"
+      "font": {
+        "size": 15,
+        "weight": 800
+      },
+      "value": "5H",
+      "color": "#9a93ab"
     },
     {
       "key": "sessionBar",
       "type": "bar",
-      "rect": [42, 37, 102, 13],
-      "bar_bg_c": "#332d29",
-      "bar_fill_c": "#e2aa70",
+      "rect": [
+        46,
+        38,
+        98,
+        12
+      ],
+      "bar_bg_c": "#231f30",
+      "bar_fill_c": "#7ed49c",
       "border_w": 0,
       "subtype": 0,
       "value": 0
@@ -40,25 +71,48 @@
     {
       "key": "sessionValue",
       "type": "text",
-      "rect": [149, 29, 43, 26],
+      "rect": [
+        148,
+        30,
+        44,
+        26
+      ],
       "alignment": "right",
-      "font": { "size": 17, "weight": 800 },
-      "value": "--"
+      "font": {
+        "size": 17,
+        "weight": 800
+      },
+      "value": "--",
+      "color": "#f3f1f8"
     },
     {
       "key": "weeklyLabel",
       "type": "text",
-      "rect": [8, 68, 30, 22],
+      "rect": [
+        8,
+        68,
+        34,
+        22
+      ],
       "alignment": "left",
-      "font": { "size": 15, "weight": 800 },
-      "value": "7D"
+      "font": {
+        "size": 15,
+        "weight": 800
+      },
+      "value": "7D",
+      "color": "#9a93ab"
     },
     {
       "key": "weeklyBar",
       "type": "bar",
-      "rect": [42, 73, 102, 13],
-      "bar_bg_c": "#332d29",
-      "bar_fill_c": "#a77b53",
+      "rect": [
+        46,
+        72,
+        98,
+        12
+      ],
+      "bar_bg_c": "#231f30",
+      "bar_fill_c": "#7ed49c",
       "border_w": 0,
       "subtype": 0,
       "value": 0
@@ -66,10 +120,19 @@
     {
       "key": "weeklyValue",
       "type": "text",
-      "rect": [149, 65, 43, 26],
+      "rect": [
+        148,
+        64,
+        44,
+        26
+      ],
       "alignment": "right",
-      "font": { "size": 17, "weight": 800 },
-      "value": "--"
+      "font": {
+        "size": 17,
+        "weight": 800
+      },
+      "value": "--",
+      "color": "#f3f1f8"
     }
   ]
 }

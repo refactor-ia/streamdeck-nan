@@ -5,43 +5,82 @@
     {
       "key": "title",
       "type": "text",
-      "rect": [8, 3, 60, 22],
+      "rect": [
+        8,
+        4,
+        70,
+        24
+      ],
       "alignment": "left",
-      "font": { "size": 18, "weight": 800 },
-      "value": "GROK"
+      "font": {
+        "size": 18,
+        "weight": 800
+      },
+      "value": "GROK",
+      "color": "#f3f1f8"
     },
     {
       "key": "experimental",
       "type": "text",
-      "rect": [72, 5, 120, 18],
+      "rect": [
+        80,
+        8,
+        112,
+        16
+      ],
       "alignment": "right",
-      "color": "#f5a623",
-      "font": { "size": 10, "weight": 800 },
-      "value": "EXPERIMENTAL"
+      "font": {
+        "size": 9,
+        "weight": 800
+      },
+      "value": "EXPERIMENTAL",
+      "color": "#9a93ab"
     },
     {
       "key": "period",
       "type": "text",
-      "rect": [8, 34, 110, 22],
+      "rect": [
+        8,
+        36,
+        100,
+        22
+      ],
       "alignment": "left",
-      "color": "#b9c9ff",
-      "font": { "size": 12, "weight": 800 },
-      "value": "BILLING PERIOD"
+      "font": {
+        "size": 12,
+        "weight": 800
+      },
+      "value": "BILLING PERIOD",
+      "color": "#9a93ab"
     },
     {
       "key": "value",
       "type": "text",
-      "rect": [122, 28, 70, 32],
+      "rect": [
+        112,
+        28,
+        80,
+        32
+      ],
       "alignment": "right",
-      "font": { "size": 24, "weight": 800 },
-      "value": "--"
+      "font": {
+        "size": 24,
+        "weight": 800
+      },
+      "value": "--",
+      "color": "#f3f1f8"
     },
     {
       "key": "indicator",
       "type": "bar",
-      "rect": [8, 69, 184, 16],
-      "bar_bg_c": "#252b3d",
-      "bar_fill_c": "#7d5cff",
+      "rect": [
+        8,
+        70,
+        184,
+        12
+      ],
+      "bar_bg_c": "#231f30",
+      "bar_fill_c": "#7ed49c",
       "border_w": 0,
       "subtype": 0,
       "value": 0
@@ -49,11 +88,19 @@
     {
       "key": "status",
       "type": "text",
-      "rect": [8, 88, 184, 10],
+      "rect": [
+        8,
+        86,
+        184,
+        12
+      ],
       "alignment": "right",
-      "color": "#f5a623",
-      "font": { "size": 8, "weight": 800 },
-      "value": "NO DATA"
+      "font": {
+        "size": 9,
+        "weight": 800
+      },
+      "value": "NO DATA",
+      "color": "#9a93ab"
     }
   ]
 }
