@@ -32,7 +32,7 @@ NaN, AI usage, quota, tokens, Claude, Codex, Grok, Stream Deck+
 | App icon (1024×1024) | Render at upload time from `design-assets/nan-brand/source/nan-isotipo-color.svg` | Source of truth in repo |
 | Gallery screenshots | Real Stream Deck+ dial + keypad captures showing quota states | TODO: capture on hardware |
 | Category icon (in-manifest, white mono SVG) | `imgs/plugin/nan-category.svg` | Done |
-| Action icons (in-manifest, white mono SVG) | `imgs/actions/nan-usage/nan-usage.svg` for the dial | Done (Grok keeps shared icon, deferred) |
+| Action icons (in-manifest, white mono SVG) | `imgs/actions/*/**.svg`, one per action on the 100×100 grid; the dashboard launcher keeps its PNG isotype | Done |
 
 ## Privacy / support URLs
 
