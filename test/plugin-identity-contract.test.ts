@@ -29,10 +29,10 @@ const actionIds = [
 
 test("plugin migration uses the approved identity, version, author, and eight recreated actions", () => {
   assert.equal(manifest.UUID, "com.refactor-ia.nan");
-  assert.equal(manifest.Version, "1.0.9.0");
+  assert.equal(manifest.Version, "1.0.10.0");
   assert.equal(manifest.SDKVersion, 3);
   assert.equal(manifest.Author, "Refactor IA");
-  assert.equal(JSON.parse(readFileSync("package.json", "utf8")).version, "1.0.9");
+  assert.equal(JSON.parse(readFileSync("package.json", "utf8")).version, "1.0.10");
   assert.deepEqual(manifest.Actions.map(({ UUID }: { UUID: string }) => UUID), actionIds);
   for (const actionId of actionIds) {
     assert.match(actionSources.join("\n"), new RegExp(`UUID: "${actionId}"`));
