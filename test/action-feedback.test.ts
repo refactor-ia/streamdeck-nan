@@ -21,6 +21,11 @@ test("formatCountdown returns null for expired dates", () => {
   assert.equal(formatCountdown(past), null);
 });
 
+test("formatCountdown switches to days above 24 hours so dial values stay short", () => {
+  const future = new Date(Date.now() + (5 * 24 + 10) * 3_600_000 + 30 * 60_000).toISOString();
+  assert.equal(formatCountdown(future), "5d 10h");
+});
+
 test("formatCountdown formats future dates correctly", () => {
   const futureMs = Date.now() + 3 * 3_600_000 + 25 * 60_000 + 10_000;
   const future = new Date(futureMs).toISOString();

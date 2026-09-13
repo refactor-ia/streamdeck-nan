@@ -101,6 +101,7 @@ export function formatCountdown(isoString: string): string | null {
   const minutes = Math.floor((diffMs % 3_600_000) / 60_000);
   const seconds = Math.floor((diffMs % 60_000) / 1000);
 
+  if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
   if (hours >= 1) return `${hours}h ${minutes}m`;
   if (minutes >= 1) return `${minutes}m ${seconds}s`;
   return "<1m";

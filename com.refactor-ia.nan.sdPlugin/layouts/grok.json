@@ -42,7 +42,7 @@
       "rect": [
         8,
         36,
-        100,
+        88,
         22
       ],
       "alignment": "left",
@@ -57,14 +57,14 @@
       "key": "value",
       "type": "text",
       "rect": [
-        112,
+        96,
         28,
-        80,
+        96,
         32
       ],
       "alignment": "right",
       "font": {
-        "size": 24,
+        "size": 22,
         "weight": 800
       },
       "value": "--",
