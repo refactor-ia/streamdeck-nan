@@ -71,7 +71,8 @@ Your API key is stored only in the macOS Keychain, never in Stream Deck settings
 1. Drag **NaN Model Usage** onto a regular key position in the Stream Deck app.
 2. Select the new key and click **Refresh models** in its configuration panel.
 3. Choose a model from the **Model** dropdown. The list comes from your NaN account, so save your API key first.
-4. Press the physical key to refresh its usage.
+4. Pick a **Key style**: **Ring** (default, circular progress), **Bar** (large percentage with a thin bar), or **Dual rows** (labelled window row with its own bar). Colors turn amber at 75% and red at 90%.
+5. Press the physical key to refresh its usage.
 
 You can also add **NaN Total Tokens** or **NaN Monthly Tokens** to regular keys. **NaN Dashboard** only opens the dashboard in your browser; it does not use your API key or load usage data.
 

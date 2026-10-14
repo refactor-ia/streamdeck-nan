@@ -9973,6 +9973,32 @@ class UsageProviderCoordinator {
     }
 }
 
+/** Single source of truth for refactoria.dev brand colors and usage thresholds. Keep layouts/*.json and ui/property-inspector.html in sync (enforced by test/branding-tokens.test.ts). */
+const BRAND = {
+    bg: "#0b0714",
+    track: "#2c2144",
+    brand: "#7127ff",
+    text: "#ffffff",
+    muted: "#c9c1de",
+    subtle: "#9a8fb8",
+    warn: "#ffb547",
+    critical: "#ff5470",
+    stale: "#6b5f8a",
+};
+/** Usage percentage at which a level turns warn (inclusive). */
+const WARN_AT = 75;
+/** Usage percentage at which a level turns critical (inclusive). */
+const CRITICAL_AT = 90;
+function levelColor(percent, stale = false) {
+    if (stale)
+        return BRAND.stale;
+    if (percent >= CRITICAL_AT)
+        return BRAND.critical;
+    if (percent >= WARN_AT)
+        return BRAND.warn;
+    return BRAND.brand;
+}
+
 function isSelectableNanLiveModel(model) {
     return typeof model === "string" && model.length > 0 && model.length <= 128
         && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model);
@@ -10039,8 +10065,8 @@ function renderNanDashboardFeedback(state, settings) {
     const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
     if (!selected) {
         if (!state.error && state.quota)
-            return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
-        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
+            return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: "NO QUOTA" };
+        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: dashboardStatus(state) };
     }
     const status = state.stale ? "STALE" : "";
     const model = state.quota?.models.find((entry) => entry.model === selected);
@@ -10052,17 +10078,17 @@ function renderNanDashboardFeedback(state, settings) {
             model: model.model,
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
-            unit: `${formatPercentage$1(model.percentage)}% · ${period}`,
-            indicator: Math.min(100, Math.max(0, model.percentage)),
+            unit: `${formatPercentage(model.percentage)}% · ${period}`,
+            indicator: bar(model.percentage, state.stale),
             status,
         };
     }
     const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
     if (uncapped)
-        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status };
+        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: bar(undefined), status };
     const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
     const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
-    return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: 0, status };
+    return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: bar(undefined), status };
 }
 function dashboardStatus(state) {
     switch (state.error) {
@@ -10073,7 +10099,7 @@ function dashboardStatus(state) {
         default: return state.metricsError === "transient" ? "DASHBOARD UNAVAILABLE" : "NO QUOTA";
     }
 }
-function formatPercentage$1(value) {
+function formatPercentage(value) {
     return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
 }
 function formatCountdown(isoString) {
@@ -10099,13 +10125,13 @@ function renderClaudeFeedback(result, _showCountdown = false) {
             title: "Claude",
             status: "NO DATA",
             sessionValue: "--",
-            sessionBar: 0,
+            sessionBar: bar(undefined),
             weeklyValue: "--",
-            weeklyBar: 0,
+            weeklyBar: bar(undefined),
         };
     }
-    const session = usageDisplay(result.usage.windows.session?.usedPercent);
-    const weekly = usageDisplay(result.usage.windows.week?.usedPercent);
+    const session = usageDisplay(result.usage.windows.session?.usedPercent, result.stale);
+    const weekly = usageDisplay(result.usage.windows.week?.usedPercent, result.stale);
     return {
         title: "Claude",
         status: result.stale
@@ -10126,7 +10152,7 @@ function renderCodexFeedback(result, showCountdown = false) {
             title: "GPT / OPENAI",
             period: "WEEKLY",
             value: "--",
-            indicator: 0,
+            indicator: bar(undefined),
             status: "NO DATA",
         };
     }
@@ -10136,7 +10162,7 @@ function renderCodexFeedback(result, showCountdown = false) {
         title: "GPT / OPENAI",
         period: "WEEKLY",
         value: countdown ?? `${Math.round(weekly)}%`,
-        indicator: weekly,
+        indicator: bar(week.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
     };
 }
@@ -10148,7 +10174,7 @@ function renderGrokFeedback(result, showCountdown = false) {
             experimental: "EXPERIMENTAL",
             period: "BILLING PERIOD",
             value: "--",
-            indicator: 0,
+            indicator: bar(undefined),
             status: "NO DATA",
         };
     }
@@ -10159,15 +10185,20 @@ function renderGrokFeedback(result, showCountdown = false) {
         experimental: "EXPERIMENTAL",
         period: billing.resetsAt ? `RESETS ${formatResetDate(billing.resetsAt)}` : "BILLING PERIOD",
         value: countdown ?? `${Math.round(used)}%`,
-        indicator: used,
+        indicator: bar(billing.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
     };
 }
-function usageDisplay(value) {
+function usageDisplay(value, stale) {
     if (value === undefined)
-        return { value: "--", bar: 0 };
-    const clamped = Math.min(100, Math.max(0, value));
-    return { value: `${Math.round(clamped)}%`, bar: clamped };
+        return { value: "--", bar: bar(undefined) };
+    return { value: `${Math.round(Math.min(100, Math.max(0, value)))}%`, bar: bar(value, stale) };
+}
+/** Bar fill follows the shared level thresholds on the raw percentage; missing data or stale renders muted. */
+function bar(percent, stale = false) {
+    if (percent === undefined)
+        return { value: 0, bar_fill_c: levelColor(0, true) };
+    return { value: Math.min(100, Math.max(0, percent)), bar_fill_c: levelColor(percent, stale) };
 }
 function compactNumber(value) {
     return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -11438,7 +11469,7 @@ class NanKeychainClient {
     async request(payload, expectsSecret, timeoutMs) {
         const stdin = `${JSON.stringify(payload)}\n`;
         if (Buffer.byteLength(stdin, "utf8") > NAN_KEYCHAIN_MAX_STDIN_BYTES)
-            throw unavailable$2();
+            throw unavailable$1();
         let result;
         try {
             result = await this.run({
@@ -11450,23 +11481,23 @@ class NanKeychainClient {
             });
         }
         catch {
-            throw unavailable$2();
+            throw unavailable$1();
         }
         if (result.exitCode !== 0 || Buffer.byteLength(result.stdout, "utf8") > NAN_KEYCHAIN_MAX_STDOUT_BYTES)
-            throw unavailable$2();
+            throw unavailable$1();
         let response;
         try {
             response = JSON.parse(result.stdout);
         }
         catch {
-            throw unavailable$2();
+            throw unavailable$1();
         }
         if (!isRecord$2(response) || response.ok !== true)
-            throw unavailable$2();
+            throw unavailable$1();
         if (!expectsSecret)
             return;
         if (typeof response.secret !== "string" && response.secret !== null)
-            throw unavailable$2();
+            throw unavailable$1();
         return response.secret;
     }
 }
@@ -11490,7 +11521,7 @@ function runNanKeychain(request) {
         };
         const fail = () => finish(() => {
             child.kill("SIGKILL");
-            reject(unavailable$2());
+            reject(unavailable$1());
         });
         const timeout = setTimeout(fail, request.timeoutMs);
         child.once("error", fail);
@@ -11505,7 +11536,7 @@ function runNanKeychain(request) {
         child.stdin.end(request.stdin, "utf8");
     });
 }
-function unavailable$2() {
+function unavailable$1() {
     return new Error("Keychain helper unavailable");
 }
 function isRecord$2(value) {
@@ -11535,7 +11566,7 @@ class NanApiKeyStore {
             value = await this.keychain.getSessionCache();
         }
         catch {
-            throw unavailable$1();
+            throw unavailable();
         }
         // Entries left by the previous session-based release are JSON, never valid API keys.
         return value !== null && isValidNanApiKey(value) ? value : undefined;
@@ -11547,7 +11578,7 @@ class NanApiKeyStore {
             await this.keychain.putSessionCache(key);
         }
         catch {
-            throw unavailable$1();
+            throw unavailable();
         }
     }
     async clear() {
@@ -11555,11 +11586,11 @@ class NanApiKeyStore {
             await this.keychain.deleteSessionCache();
         }
         catch {
-            throw unavailable$1();
+            throw unavailable();
         }
     }
 }
-function unavailable$1() {
+function unavailable() {
     return new Error("Keychain unavailable");
 }
 
@@ -12387,19 +12418,17 @@ let NanDemoUsage = (() => {
     return _classThis;
 })();
 
-/** Shared NaN brand theme for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
+/** Shared brand theme (derived from branding/tokens) for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
 const THEME = {
-    bg: "#0e0c14",
-    fg: "#f3f1f8",
-    muted: "#9a93ab",
-    track: "#231f30",
-    violet: "#7d39eb",
-    violetSoft: "#b48cff",
-    ok: "#7ed49c",
-    warn: "#ffc247",
-    danger: "#ff5c6c",
-    dangerBg: "#7a0f1c",
-    dangerTrack: "rgba(0,0,0,0.25)",
+    bg: BRAND.bg,
+    fg: BRAND.text,
+    track: BRAND.track,
+    violet: BRAND.brand,
+    violetSoft: BRAND.muted,
+    ok: BRAND.brand,
+    warn: BRAND.warn,
+    danger: BRAND.critical,
+    stale: BRAND.stale,
 };
 const KEY_FONT = "'Helvetica Neue',Helvetica,Arial,sans-serif";
 /** Renders one bold SVG text run; an empty value renders nothing. */
@@ -12418,7 +12447,7 @@ function chipHeader(title, fg, chipFill = THEME.violet) {
 /** Gauge track (plus optional fill) and the trailing live dot or status text. */
 function gaugeFooter(gaugeWidth, fillColor, status, statusColor, trackColor) {
     const trackWidth = status ? 42 : 52;
-    const fill = gaugeWidth > 0 ? `<rect x="6" y="62" width="${Math.min(trackWidth, gaugeWidth * trackWidth / 60).toFixed(2)}" height="3" rx="1.5" fill="${fillColor}"/>` : "";
+    const fill = "";
     const trailer = status ? text(status, 66, 65, statusColor, 5, { anchor: "end" }) : `<circle cx="63" cy="63.5" r="1.5" fill="${THEME.ok}"/>`;
     return `<rect x="6" y="62" width="${trackWidth}" height="3" rx="1.5" fill="${trackColor}"/>${fill}${trailer}`;
 }
@@ -12426,122 +12455,188 @@ function escapeXml(value) {
     return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character]);
 }
 
-/** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
-function renderNanModelUsageImage(state, settings) {
-    return `data:image/svg+xml,${encodeURIComponent(renderNanModelUsageSvg(state, settings))}`;
+const DEFAULT_KEY_STYLE = "ring";
+const SANS = "Inter,-apple-system,'Helvetica Neue',Arial,sans-serif";
+const MONO = "'JetBrains Mono','SF Mono',Menlo,monospace";
+const SIZE = 144;
+const MODEL_ALIASES = {
+    "deepseek-v4-flash": "DS V4 FLASH",
+    "mimo-v2.5": "MIMO V2.5",
+    "qwen3.6": "QWEN 3.6",
+    "gemma4": "GEMMA 4",
+};
+function normalizeKeyStyle(value) {
+    return value === "bar" || value === "dual" || value === "ring" ? value : DEFAULT_KEY_STYLE;
 }
-function renderNanModelUsageSvg(state, settings) {
-    const selected = validModel(settings.model) ? settings.model : undefined;
-    const quotaModel = selected && state.quota
-        ? state.quota.models.find((entry) => entry.model === selected) ?? state.quota.uncappedModels.find((entry) => entry.model === selected)
-        : undefined;
-    const monthlyModel = selected ? state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected) : undefined;
-    const display = !selected
-        ? pendingSelection()
-        : quotaModel
-            ? isCapped(quotaModel)
-                ? capped(quotaModel, state.stale)
-                : uncapped(quotaModel, state.stale)
-            : monthlyModel
-                ? monthly(monthlyModel, state.metricsStale === true || state.stale)
-                : !state.quota && !state.metrics
-                    ? unavailable(state)
-                    : state.catalog?.includes(selected)
-                        ? noCap(selected, state.metrics ? "0" : "--", state.metricsStale === true || state.stale)
-                        : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
-    const foreground = display.foreground ?? THEME.fg;
-    const [firstLabel = "", secondLabel = ""] = display.label;
-    const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${display.background ?? THEME.bg}"/>${border}${chipHeader(firstLabel, foreground)}${text(secondLabel, 6, 19, foreground, 6)}
-${text(display.primary, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.secondary, 6, 46, foreground, 5.5)}${text(display.tertiary, 6, 52, foreground, 5.5, { opacity: 0.6 })}
-${gaugeFooter(display.gauge, display.accent, display.status, display.statusColor ?? display.accent, display.gaugeTrack ?? THEME.track)}</svg>`;
+/** Short uppercase label for the single label slot; unknown models are truncated to 11 characters. */
+function modelAlias(model) {
+    const known = MODEL_ALIASES[model];
+    if (known)
+        return known;
+    const upper = model.toUpperCase();
+    return upper.length > 11 ? `${upper.slice(0, 10)}…` : upper;
 }
-function pendingSelection() {
-    return { label: ["MODEL"], primary: "--", secondary: "CHOOSE MODEL", tertiary: "IN SETTINGS", status: "SETUP", statusColor: THEME.violetSoft, accent: THEME.muted, gauge: 0 };
+function formatReset(resetAt, now) {
+    if (!resetAt)
+        return "";
+    const target = Date.parse(resetAt);
+    if (Number.isNaN(target))
+        return "";
+    if (target - now <= 0)
+        return "NOW";
+    const minutesTotal = Math.floor((target - now) / 60_000);
+    const days = Math.floor(minutesTotal / 1440);
+    const hours = Math.floor((minutesTotal % 1440) / 60);
+    const minutes = minutesTotal % 60;
+    if (days > 0)
+        return `${days}D ${hours}H`;
+    if (hours > 0)
+        return `${hours}H ${minutes}M`;
+    return `${Math.max(1, minutes)}M`;
 }
-function capped(model, stale) {
-    const limit = model.percentage > 90;
-    const amber = !limit && (model.percentage > 80 || stale);
-    return {
-        label: labelLines(model.model),
-        primary: `${formatPercentage(model.percentage)}%`,
-        secondary: `USED ${compact$1(model.tokensUsed)}`,
-        tertiary: `CAP ${compact$1(model.cap)} · ${period(model)}`,
-        status: stale ? "STALE" : limit ? "LIMIT" : "",
-        statusColor: limit ? "#ffffff" : THEME.warn,
-        accent: limit ? "#ffffff" : amber ? THEME.warn : THEME.ok,
-        gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
-        background: limit ? THEME.dangerBg : undefined,
-        border: limit ? THEME.danger : undefined,
-        foreground: limit ? "#ffffff" : undefined,
-        gaugeTrack: limit ? THEME.dangerTrack : undefined,
-    };
+function ringDash(percent, radius) {
+    const circumference = 2 * Math.PI * radius;
+    const clamped = Math.min(100, Math.max(0, percent));
+    return { circumference, filled: circumference * clamped / 100 };
 }
-function isCapped(value) {
-    return typeof value === "object" && value !== null && "cap" in value && "percentage" in value;
+function renderKeyImage(view, style) {
+    return `data:image/svg+xml,${encodeURIComponent(renderKeySvg(view, style))}`;
 }
-function uncapped(model, stale) {
-    return {
-        label: labelLines(model.model),
-        primary: compact$1(model.tokensUsed),
-        secondary: "UNCAPPED",
-        tertiary: period(model),
-        status: stale ? "STALE" : "",
-        statusColor: THEME.warn,
-        accent: stale ? THEME.warn : THEME.ok,
-        gauge: 0,
-    };
+function renderKeySvg(view, style) {
+    const body = view.error || view.rows.length === 0 ? errorBody(view) : style === "bar" ? barBody(view) : style === "dual" ? dualBody(view) : ringBody(view);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" role="img" aria-label="${escapeXml(`${view.label} usage`)}">`
+        + `<rect width="${SIZE}" height="${SIZE}" rx="14" fill="${BRAND.bg}"/>${body}</svg>`;
 }
-function monthly(model, stale) {
-    return {
-        label: labelLines(model.model),
-        primary: compact$1(model.totalTokens),
-        secondary: "MONTH TOKENS",
-        tertiary: "NO CAP · MTD",
-        status: stale ? "STALE" : "",
-        statusColor: THEME.warn,
-        accent: stale ? THEME.warn : THEME.violetSoft,
-        gauge: 0,
-    };
+function t(value, x, y, fill, options = {}) {
+    if (!value)
+        return "";
+    const size = options.size ?? 13;
+    const family = options.mono ? MONO : SANS;
+    return `<text x="${x}" y="${y}" fill="${fill}" font-family="${family}" font-size="${size}" font-weight="700" text-anchor="${options.anchor ?? "start"}">${escapeXml(value)}</text>`;
 }
-function noCap(model, primary, stale) {
-    return { label: labelLines(model), primary, secondary: "MONTH TOKENS", tertiary: "NO CAP", status: stale ? "STALE" : "", statusColor: THEME.warn, accent: stale ? THEME.warn : THEME.muted, gauge: 0 };
+const pct = (value) => `${Math.round(value)}%`;
+const label = (view) => view.label.toUpperCase();
+const hasPercent = (row) => row?.percent !== undefined && Number.isFinite(row.percent);
+function primaryText(view) {
+    const row = view.rows[0];
+    return hasPercent(row) ? pct(row.percent) : view.value ?? "--";
 }
-function unavailable(state) {
-    const { error } = state;
-    const status = error === "needs-key" || error === "key-rejected" ? "API KEY"
-        : error === "keychain-unavailable" || state.metricsError !== undefined ? "ERROR" : "NO DATA";
-    const secondary = status === "API KEY" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
-    const accent = status === "ERROR" ? THEME.danger : THEME.warn;
-    return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
+function accent(view, row) {
+    if (view.stale || !hasPercent(row))
+        return BRAND.stale;
+    return levelColor(row.percent);
 }
-function period(model) {
-    const details = [];
-    if (model.resetAt) {
-        const date = new Date(model.resetAt);
-        if (!Number.isNaN(date.valueOf()))
-            details.push(`${UTC_MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`);
+/** The STALE marker replaces the reset countdown when the data is stale. */
+function footerText(view, reset) {
+    return view.stale ? { text: "STALE", color: BRAND.warn } : { text: reset ?? "", color: BRAND.subtle };
+}
+function errorBody(view) {
+    const status = view.status ?? "NO DATA";
+    const color = view.error ? BRAND.critical : BRAND.warn;
+    return t(label(view), 72, 26, BRAND.subtle, { anchor: "middle" })
+        + t("--", 72, 84, BRAND.stale, { anchor: "middle", mono: true, size: 40 })
+        + t(status, 72, 116, color, { anchor: "middle" });
+}
+function ringBody(view) {
+    const row = view.rows[0];
+    const percent = hasPercent(row);
+    const shown = primaryText(view);
+    const radius = 46;
+    const cx = 72, cy = 82;
+    const color = accent(view, row);
+    const dashed = percent ? "" : ' stroke-linecap="round" stroke-dasharray="4 8"';
+    const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${BRAND.track}" stroke-width="10"${dashed}/>`;
+    let arc = "";
+    if (hasPercent(row)) {
+        const { circumference, filled } = ringDash(row.percent, radius);
+        if (filled > 0) {
+            arc = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${filled.toFixed(2)} ${(circumference - filled).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+        }
     }
-    if (model.windowHours)
-        details.push(`${model.windowHours}H`);
-    if (details.length === 1 && model.windowHours && !model.resetAt)
-        return `${details[0]} WINDOW`;
-    return details.length > 0 ? details.join(" · ") : "QUOTA";
+    const footer = footerText(view, row.reset);
+    return `${track}${arc}`
+        + t(label(view), 72, 20, BRAND.subtle, { anchor: "middle" })
+        + t(shown, 72, 90, percent ? BRAND.text : BRAND.muted, { anchor: "middle", mono: true, size: shown.length > 4 ? 24 : 30 })
+        + t(footer.text, 72, 110, footer.color, { anchor: "middle", mono: true });
 }
-function labelLines(value) {
-    if (value.length <= 12)
-        return [value];
-    const candidate = value.slice(0, 12);
-    const breakAt = Math.max(candidate.lastIndexOf("-"), candidate.lastIndexOf("_"), candidate.lastIndexOf(" "));
-    const firstEnd = breakAt >= 4 ? breakAt + 1 : 12;
-    const first = value.slice(0, firstEnd);
-    const rest = value.slice(firstEnd);
-    return [first, rest.length > 12 ? `${rest.slice(0, 11)}…` : rest];
+function barBody(view) {
+    const row = view.rows[0];
+    const percent = hasPercent(row);
+    const shown = primaryText(view);
+    const color = accent(view, row);
+    const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
+    const fill = width > 0 ? `<rect x="12" y="98" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "";
+    const footer = footerText(view, row.reset);
+    return t(label(view), 12, 26, BRAND.subtle)
+        + `<circle cx="132" cy="21" r="5" fill="${color}"/>`
+        + t(shown, 12, 82, percent ? BRAND.text : BRAND.muted, { mono: true, size: shown.length > 4 ? 36 : 44 })
+        + `<rect x="12" y="98" width="120" height="8" rx="4" fill="${BRAND.track}"/>${fill}`
+        + t(footer.text, 12, 130, footer.color, { mono: true });
 }
-const UTC_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+function dualBody(view) {
+    const rows = view.rows.slice(0, 2);
+    const parts = [t(label(view), 12, 26, BRAND.subtle)];
+    rows.forEach((row, index) => {
+        const percent = hasPercent(row);
+        const top = 62 + index * 40;
+        const color = accent(view, row);
+        const shown = hasPercent(row) ? pct(row.percent) : index === 0 && view.value ? view.value : "--";
+        const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
+        parts.push(t(row.label.toUpperCase(), 12, top, BRAND.muted), t(shown, 132, top, percent ? BRAND.text : BRAND.muted, { anchor: "end", mono: true, size: 16 }), `<rect x="12" y="${top + 8}" width="120" height="8" rx="4" fill="${BRAND.track}"/>`, width > 0 ? `<rect x="12" y="${top + 8}" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "");
+    });
+    const footer = footerText(view, rows.length === 1 ? rows[0].reset : undefined);
+    parts.push(t(footer.text, 12, 134, footer.color, { mono: true }));
+    return parts.join("");
+}
+
+/** Maps shared dashboard usage onto the style-agnostic key view model. */
+function buildNanModelKeyView(state, settings, now) {
+    const selected = validModel(settings.model) ? settings.model : undefined;
+    if (!selected)
+        return { label: "MODEL", rows: [], status: "SETUP" };
+    const capped = state.quota?.models.find((entry) => entry.model === selected);
+    if (capped) {
+        return {
+            label: modelAlias(selected),
+            rows: [{ label: windowLabel(capped.windowHours), percent: capped.percentage, reset: formatReset(capped.resetAt, now) }],
+            stale: state.stale,
+        };
+    }
+    const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
+    if (uncapped) {
+        return {
+            label: modelAlias(selected),
+            rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
+            value: compact$1(uncapped.tokensUsed),
+            stale: state.stale,
+        };
+    }
+    const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
+    if (monthly) {
+        return { label: modelAlias(selected), rows: [{ label: "MONTH", reset: NO_CAP }], value: compact$1(monthly.totalTokens), stale: state.metricsStale === true || state.stale };
+    }
+    if (!state.quota && !state.metrics) {
+        const status = state.error === "needs-key" || state.error === "key-rejected" ? "API KEY"
+            : state.error === "keychain-unavailable" || state.metricsError !== undefined ? "ERROR" : "NO DATA";
+        return { label: "DASHBOARD", rows: [], status, error: status === "ERROR" };
+    }
+    if (state.catalog?.includes(selected)) {
+        // Catalog model without quota or usage rows: NO CAP, month-to-date tokens (0 once metrics loaded).
+        return { label: modelAlias(selected), rows: [{ label: "MONTH", reset: NO_CAP }], value: state.metrics ? "0" : "--", stale: state.metricsStale === true || state.stale };
+    }
+    return { label: modelAlias(selected), rows: [], status: "NO DATA" };
+}
+function renderNanModelKeyImage(state, settings, now = Date.now()) {
+    return renderKeyImage(buildNanModelKeyView(state, settings, now), normalizeKeyStyle(settings.keyStyle));
+}
+const NO_CAP = "NO CAP";
+/** Provider windows without hours are monthly; 168h is the weekly window. */
+function windowLabel(hours) {
+    if (hours === null)
+        return "MONTH";
+    return hours === 168 ? "WEEK" : `${hours}H`;
+}
 function compact$1(value) { return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
-function formatPercentage(value) { return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, ""); }
 function validModel(value) { return typeof value === "string" && value.length > 0 && value.length <= 128 && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value); }
 
 const GET_MODELS = "nan.modelUsage.getModels.v1";
@@ -12633,7 +12728,7 @@ let NanModelUsage = (() => {
         async render(entry, usage) {
             if (this.visible.get(entry.action.id) !== entry)
                 return;
-            const image = renderNanModelUsageImage(usage, entry.settings);
+            const image = renderNanModelKeyImage(usage, entry.settings);
             if (this.visible.get(entry.action.id) !== entry)
                 return;
             await entry.action.setImage(image);
@@ -12672,7 +12767,7 @@ function renderNanMetricsUsageSvg(state, period) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN ${display.title.toLowerCase()} tokens">
 <rect width="72" height="72" rx="6" fill="${THEME.bg}"/>${chipHeader(display.title, THEME.fg)}
 ${text(display.value, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.unit, 6, 46, THEME.fg, 5.5)}${text(display.period, 6, 52, THEME.fg, 5.5, { opacity: 0.6 })}
-${gaugeFooter(0, display.accent, display.status, display.accent, THEME.track)}</svg>`;
+${gaugeFooter(0, display.accent, display.status, display.statusColor, THEME.track)}</svg>`;
 }
 function metricsDisplay(state, period) {
     const title = period === "allTime" ? "TOTAL" : "MONTHLY";
@@ -12680,10 +12775,10 @@ function metricsDisplay(state, period) {
     const window = state.metrics?.[period];
     if (!window) {
         const status = state.metricsError ? "METRICS ERROR" : "NO DATA";
-        return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
+        return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn, statusColor: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
     }
     const stale = state.stale || state.metricsStale === true;
-    return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.warn : THEME.violetSoft };
+    return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.stale : THEME.violetSoft, statusColor: THEME.warn };
 }
 function compact(value) {
     return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -12789,6 +12884,7 @@ let NanMonthlyTokensUsage = (() => {
 })();
 
 const DASHBOARD_URL = "https://cloud.nan.builders/dashboard";
+
 const OPEN_FAILED_WARNING = "NaN Dashboard could not be opened.";
 /** Keypad-only launcher for the NaN Dashboard; it owns no settings or dashboard lifecycle. */
 let NanDashboardLauncher = (() => {

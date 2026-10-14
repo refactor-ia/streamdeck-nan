@@ -1,44 +1,53 @@
 import type { CoordinatedUsageResult } from "../usage/provider-coordinator.js";
 import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
+import { levelColor } from "../branding/tokens.js";
 import { listNanModels, resolveNanLiveModel } from "./nan-live-model.js";
 
+/** Bar item value with a per-update fill color (Stream Deck bar layout item override). */
+export interface BarFeedback {
+  readonly value: number;
+  readonly bar_fill_c: string;
+}
+
+export type FeedbackValue = string | number | BarFeedback;
+
 export interface ClaudeFeedback {
-  readonly [key: string]: string | number;
+  readonly [key: string]: FeedbackValue;
   readonly title: "Claude";
   readonly status: "" | "NO DATA" | "STALE";
   readonly sessionValue: string;
-  readonly sessionBar: number;
+  readonly sessionBar: BarFeedback;
   readonly weeklyValue: string;
-  readonly weeklyBar: number;
+  readonly weeklyBar: BarFeedback;
 }
 
 export interface CodexFeedback {
-  readonly [key: string]: string | number;
+  readonly [key: string]: FeedbackValue;
   readonly title: "GPT / OPENAI";
   readonly period: "WEEKLY";
   readonly value: string;
-  readonly indicator: number;
+  readonly indicator: BarFeedback;
   readonly status: "" | "NO DATA" | "STALE";
 }
 
 export interface GrokFeedback {
-  readonly [key: string]: string | number;
+  readonly [key: string]: FeedbackValue;
   readonly title: "GROK";
   readonly experimental: "EXPERIMENTAL";
   readonly period: string;
   readonly value: string;
-  readonly indicator: number;
+  readonly indicator: BarFeedback;
   readonly status: "" | "NO DATA" | "STALE";
 }
 
 export interface NanDashboardFeedback {
-  readonly [key: string]: string | number;
+  readonly [key: string]: FeedbackValue;
   readonly title: "NaN";
   readonly demo: "DASHBOARD";
   readonly model: string;
   readonly value: string;
   readonly unit: string;
-  readonly indicator: number;
+  readonly indicator: BarFeedback;
   readonly status: "" | "STALE" | "NO QUOTA" | "ADD API KEY" | "KEY REJECTED" | "KEYCHAIN UNAVAILABLE"
     | "DASHBOARD UNAVAILABLE" | "INVALID SOURCE";
 }
@@ -48,8 +57,8 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
   const models = listNanModels(state);
   const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
   if (!selected) {
-    if (!state.error && state.quota) return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
-    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
+    if (!state.error && state.quota) return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: "NO QUOTA" };
+    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: dashboardStatus(state) };
   }
   const status = state.stale ? "STALE" : "";
   const model = state.quota?.models.find((entry) => entry.model === selected);
@@ -62,15 +71,15 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
       value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
       // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
       unit: `${formatPercentage(model.percentage)}% · ${period}`,
-      indicator: Math.min(100, Math.max(0, model.percentage)),
+      indicator: bar(model.percentage, state.stale),
       status,
     };
   }
   const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
-  if (uncapped) return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status };
+  if (uncapped) return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: bar(undefined), status };
   const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
   const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
-  return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: 0, status };
+  return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: bar(undefined), status };
 }
 
 function dashboardStatus(state: NanDashboardUsage): NanDashboardFeedback["status"] {
@@ -109,14 +118,14 @@ export function renderClaudeFeedback(result: CoordinatedUsageResult, _showCountd
       title: "Claude",
       status: "NO DATA",
       sessionValue: "--",
-      sessionBar: 0,
+      sessionBar: bar(undefined),
       weeklyValue: "--",
-      weeklyBar: 0,
+      weeklyBar: bar(undefined),
     };
   }
 
-  const session = usageDisplay(result.usage.windows.session?.usedPercent);
-  const weekly = usageDisplay(result.usage.windows.week?.usedPercent);
+  const session = usageDisplay(result.usage.windows.session?.usedPercent, result.stale);
+  const weekly = usageDisplay(result.usage.windows.week?.usedPercent, result.stale);
   return {
     title: "Claude",
     status: result.stale
@@ -138,7 +147,7 @@ export function renderCodexFeedback(result: CoordinatedUsageResult, showCountdow
       title: "GPT / OPENAI",
       period: "WEEKLY",
       value: "--",
-      indicator: 0,
+      indicator: bar(undefined),
       status: "NO DATA",
     };
   }
@@ -149,7 +158,7 @@ export function renderCodexFeedback(result: CoordinatedUsageResult, showCountdow
     title: "GPT / OPENAI",
     period: "WEEKLY",
     value: countdown ?? `${Math.round(weekly)}%`,
-    indicator: weekly,
+    indicator: bar(week.usedPercent, result.stale),
     status: result.stale ? "STALE" : "",
   };
 }
@@ -162,7 +171,7 @@ export function renderGrokFeedback(result: CoordinatedUsageResult, showCountdown
       experimental: "EXPERIMENTAL",
       period: "BILLING PERIOD",
       value: "--",
-      indicator: 0,
+      indicator: bar(undefined),
       status: "NO DATA",
     };
   }
@@ -174,15 +183,20 @@ export function renderGrokFeedback(result: CoordinatedUsageResult, showCountdown
     experimental: "EXPERIMENTAL",
     period: billing.resetsAt ? `RESETS ${formatResetDate(billing.resetsAt)}` : "BILLING PERIOD",
     value: countdown ?? `${Math.round(used)}%`,
-    indicator: used,
+    indicator: bar(billing.usedPercent, result.stale),
     status: result.stale ? "STALE" : "",
   };
 }
 
-function usageDisplay(value: number | undefined): { value: string; bar: number } {
-  if (value === undefined) return { value: "--", bar: 0 };
-  const clamped = Math.min(100, Math.max(0, value));
-  return { value: `${Math.round(clamped)}%`, bar: clamped };
+function usageDisplay(value: number | undefined, stale: boolean): { value: string; bar: BarFeedback } {
+  if (value === undefined) return { value: "--", bar: bar(undefined) };
+  return { value: `${Math.round(Math.min(100, Math.max(0, value)))}%`, bar: bar(value, stale) };
+}
+
+/** Bar fill follows the shared level thresholds on the raw percentage; missing data or stale renders muted. */
+function bar(percent: number | undefined, stale = false): BarFeedback {
+  if (percent === undefined) return { value: 0, bar_fill_c: levelColor(0, true) };
+  return { value: Math.min(100, Math.max(0, percent)), bar_fill_c: levelColor(percent, stale) };
 }
 
 function compactNumber(value: number): string {

@@ -10,6 +10,7 @@ type MetricsDisplay = {
   readonly period: string;
   readonly status: "" | "NO DATA" | "STALE" | "METRICS ERROR";
   readonly accent: string;
+  readonly statusColor: string;
 };
 
 /** Renders server-authoritative aggregate tokens on the standard 72px keypad canvas. */
@@ -22,7 +23,7 @@ export function renderNanMetricsUsageSvg(state: NanDashboardUsage, period: NanMe
   return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN ${display.title.toLowerCase()} tokens">
 <rect width="72" height="72" rx="6" fill="${THEME.bg}"/>${chipHeader(display.title, THEME.fg)}
 ${text(display.value, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.unit, 6, 46, THEME.fg, 5.5)}${text(display.period, 6, 52, THEME.fg, 5.5, { opacity: 0.6 })}
-${gaugeFooter(0, display.accent, display.status, display.accent, THEME.track)}</svg>`;
+${gaugeFooter(0, display.accent, display.status, display.statusColor, THEME.track)}</svg>`;
 }
 
 function metricsDisplay(state: NanDashboardUsage, period: NanMetricsPeriod): MetricsDisplay {
@@ -31,10 +32,10 @@ function metricsDisplay(state: NanDashboardUsage, period: NanMetricsPeriod): Met
   const window = state.metrics?.[period];
   if (!window) {
     const status = state.metricsError ? "METRICS ERROR" : "NO DATA";
-    return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
+    return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn, statusColor: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
   }
   const stale = state.stale || state.metricsStale === true;
-  return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.warn : THEME.violetSoft };
+  return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.stale : THEME.violetSoft, statusColor: THEME.warn };
 }
 
 function compact(value: number): string {

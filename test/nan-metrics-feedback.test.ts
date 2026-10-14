@@ -37,11 +37,12 @@ test("metrics keys keep zero, missing, stale, and metrics errors distinct", () =
 test("metrics artwork remains a compact 72px NaN-themed keypad image", () => {
   const svg = renderNanMetricsUsageSvg(dashboard(), "allTime");
   assert.match(svg, /width="72" height="72" viewBox="0 0 72 72"/);
-  assert.match(svg, /<rect width="72" height="72" rx="6" fill="#0e0c14"\/>/);
-  assert.match(svg, /<rect x="6" y="5" width="16" height="7" rx="2" fill="#7d39eb"\/>/);
-  assert.match(svg, /<text x="6" y="37" fill="#b48cff"/);
-  assert.match(svg, /<circle cx="63" cy="63.5" r="1.5" fill="#7ed49c"\/>/);
-  assert.match(renderNanMetricsUsageSvg(dashboard({ metricsStale: true }), "allTime"), /<text x="6" y="37" fill="#ffc247"/);
+  assert.match(svg, /<rect width="72" height="72" rx="6" fill="#0b0714"\/>/);
+  assert.match(svg, /<rect x="6" y="5" width="16" height="7" rx="2" fill="#7127ff"\/>/);
+  assert.match(svg, /<text x="6" y="37" fill="#c9c1de"/);
+  assert.match(svg, /<circle cx="63" cy="63.5" r="1.5" fill="#7127ff"\/>/);
+  assert.match(renderNanMetricsUsageSvg(dashboard({ metricsStale: true }), "allTime"), /<text x="6" y="37" fill="#6b5f8a"/);
+  assert.match(renderNanMetricsUsageSvg(dashboard({ metricsStale: true }), "allTime"), /fill="#ffb547"[^>]*>STALE</);
   for (const coordinate of [...svg.matchAll(/(?:x|y)="(\d+(?:\.\d+)?)"/g)].map((match) => Number(match[1]))) {
     assert.ok(coordinate >= 0 && coordinate <= 72, `out-of-bounds coordinate ${coordinate}`);
   }

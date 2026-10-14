@@ -11,10 +11,10 @@ import {
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { listNanModels } from "./nan-live-model.js";
-import { renderNanModelUsageImage, type NanModelSettings } from "./nan-model-feedback.js";
+import { renderNanModelKeyImage, type NanModelKeySettings } from "./nan-model-key-view.js";
 import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 
-export type NanModelUsageSettings = NanModelSettings;
+export type NanModelUsageSettings = NanModelKeySettings;
 const GET_MODELS = "nan.modelUsage.getModels.v1";
 const REFRESH_MODELS = "nan.modelUsage.refreshModels.v1";
 const MODELS = "nan.modelUsage.models.v1";
@@ -89,7 +89,7 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
 
   private async render(entry: { action: KeyAction<NanModelUsageSettings>; settings: NanModelUsageSettings; epoch: number }, usage: NanDashboardUsage): Promise<void> {
     if (this.visible.get(entry.action.id) !== entry) return;
-    const image = renderNanModelUsageImage(usage, entry.settings);
+    const image = renderNanModelKeyImage(usage, entry.settings);
     if (this.visible.get(entry.action.id) !== entry) return;
     await entry.action.setImage(image);
   }

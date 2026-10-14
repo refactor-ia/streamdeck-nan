@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { listNanModels, cycleNanLiveModel, isSelectableNanLiveModel, resolveNanLiveModel } from "../src/actions/nan-live-model.ts";
 import { renderNanDashboardFeedback } from "../src/actions/usage-feedback.ts";
-import { renderNanModelUsageSvg } from "../src/actions/nan-model-feedback.ts";
+import { renderNanModelKeyImage } from "../src/actions/nan-model-key-view.ts";
 import { parseNanQuota } from "../src/providers/nan/nan-api-quota-provider.ts";
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
 
@@ -39,7 +39,7 @@ test("dial renders capped, month-only and unused models", () => {
   const capped = renderNanDashboardFeedback(state, { model: "glm5.3" });
   assert.match(capped.unit, /^14\.4% · RESETS NOV 5/);
   const month = renderNanDashboardFeedback(state, { model: "gemma4" });
-  assert.deepEqual([month.model, month.value, month.indicator], ["gemma4", "5", 0]);
+  assert.deepEqual([month.model, month.value, month.indicator.value], ["gemma4", "5", 0]);
   assert.match(month.unit, /NO CAP/);
   const none = renderNanDashboardFeedback(state, { model: "flux-2-klein" });
   assert.deepEqual([none.model, none.value, none.status], ["flux-2-klein", "0", ""]);
@@ -64,10 +64,10 @@ test("rotation cycles exactly the rendered list in both directions and wraps", (
 });
 
 test("key renders uncapped month usage and unused models with NO CAP", () => {
-  const month = decodeURIComponent(renderNanModelUsageSvg(state, { model: "gemma4" }));
-  assert.match(month, /NO CAP/);
-  const none = renderNanModelUsageSvg(state, { model: "flux-2-klein" });
+  const svg = (model: string) => decodeURIComponent(renderNanModelKeyImage(state, { model }));
+  assert.match(svg("gemma4"), /NO CAP/);
+  const none = svg("flux-2-klein");
   assert.match(none, /NO CAP/);
-  assert.doesNotMatch(none, /NOT RETURNED/);
-  assert.match(renderNanModelUsageSvg(state, { model: "not-in-list" }), /NOT RETURNED/);
+  assert.doesNotMatch(none, /NO DATA/);
+  assert.match(svg("not-in-list"), /NO DATA/);
 });
