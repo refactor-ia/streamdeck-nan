@@ -10071,14 +10071,24 @@ function renderNanDashboardFeedback(state, settings) {
     const status = state.stale ? "STALE" : "";
     const model = state.quota?.models.find((entry) => entry.model === selected);
     if (model) {
-        const period = model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}`
-            : model.windowHours ? `ROLLING ${model.windowHours}H` : "PER MODEL";
+        // A window label is only valid for rolling usage; the capped percentage is always the billing period.
+        const { rolling } = model;
+        if (rolling) {
+            return {
+                ...base,
+                model: model.model,
+                value: `${compactNumber(rolling.tokensUsed)} / ${compactNumber(rolling.budget)}`,
+                unit: `${formatPercentage(rolling.percentage)}% · ROLLING ${rolling.windowHours}H`,
+                indicator: bar(rolling.percentage, state.stale),
+                status,
+            };
+        }
         return {
             ...base,
             model: model.model,
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
-            unit: `${formatPercentage(model.percentage)}% · ${period}`,
+            unit: `${formatPercentage(model.percentage)}% · ${model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL"}`,
             indicator: bar(model.percentage, state.stale),
             status,
         };
@@ -11937,7 +11947,7 @@ function parseNanQuota(value) {
             ...(rolling ? { rolling } : {}),
         });
     }
-    return { eligibility: "unknown", models, uncappedModels };
+    return { eligibility: "unknown", periodStart: typeof value.periodStart === "string" ? value.periodStart : null, models, uncappedModels };
 }
 function parseRolling(entry, windowHours) {
     if (entry.windowTokensUsed === undefined || entry.windowTokensUsed === null)
@@ -12598,7 +12608,7 @@ function buildNanModelKeyView(state, settings, now) {
     if (capped) {
         return {
             label: modelAlias(selected),
-            rows: [{ label: windowLabel(capped.windowHours), percent: capped.percentage, reset: formatReset(capped.resetAt, now) }],
+            rows: cappedRows(capped, now),
             stale: state.stale,
         };
     }
@@ -12606,7 +12616,8 @@ function buildNanModelKeyView(state, settings, now) {
     if (uncapped) {
         return {
             label: modelAlias(selected),
-            rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
+            // Uncapped quota carries no rolling usage: its reset belongs to the billing period.
+            rows: [{ label: "MONTH", reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
             value: compact$1(uncapped.tokensUsed),
             stale: state.stale,
         };
@@ -12630,6 +12641,17 @@ function renderNanModelKeyImage(state, settings, now = Date.now()) {
     return renderKeyImage(buildNanModelKeyView(state, settings, now), normalizeKeyStyle(settings.keyStyle));
 }
 const NO_CAP = "NO CAP";
+/**
+ * The rolling window leads when reported; the billing period is always the monthly row.
+ * Without rolling data the capped percentage/reset belong to the billing period, so they are never labelled by windowHours.
+ */
+function cappedRows(model, now) {
+    const billing = { label: "MONTH", percent: model.percentage, reset: formatReset(model.resetAt, now) };
+    const { rolling } = model;
+    if (!rolling)
+        return [billing];
+    return [{ label: windowLabel(rolling.windowHours), percent: rolling.percentage, reset: formatReset(rolling.resetAt, now) }, billing];
+}
 /** Provider windows without hours are monthly; 168h is the weekly window. */
 function windowLabel(hours) {
     if (hours === null)

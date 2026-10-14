@@ -7,8 +7,8 @@ const NOW = Date.parse("2026-10-01T00:00:00Z");
 const quota = {
   eligibility: "unknown" as const,
   models: [
-    { model: "qwen3.6", tokensUsed: 50, cap: 100, percentage: 50, resetAt: "2026-10-01T05:30:00Z", windowHours: 5 },
-    { model: "weekly-thing-long-name", tokensUsed: 1, cap: 100, percentage: 1, resetAt: null, windowHours: 168 },
+    { model: "qwen3.6", tokensUsed: 50, cap: 100, percentage: 50, resetAt: "2026-10-01T05:30:00Z", windowHours: 5, rolling: { tokensUsed: 20, budget: 100, percentage: 20, resetAt: "2026-10-01T02:00:00Z", windowHours: 5 } },
+    { model: "weekly-thing-long-name", tokensUsed: 1, cap: 100, percentage: 1, resetAt: null, windowHours: 168, rolling: { tokensUsed: 1, budget: 100, percentage: 1, resetAt: null, windowHours: 168 } },
     { model: "monthly-cap", tokensUsed: 1, cap: 100, percentage: 1, resetAt: "2026-11-01T00:00:00Z", windowHours: null },
   ],
   uncappedModels: [{ model: "gemma4", tokensUsed: 1_234_567, resetAt: null, windowHours: null }],
@@ -17,13 +17,14 @@ const usage = (overrides: Partial<NanDashboardUsage> = {}): NanDashboardUsage =>
 
 test("capped model maps to alias label, window row, percent, and countdown", () => {
   const view = buildNanModelKeyView(usage(), { model: "qwen3.6" }, NOW);
-  assert.deepEqual(view, { label: "QWEN 3.6", rows: [{ label: "5H", percent: 50, reset: "5H 30M" }], stale: false });
+  assert.deepEqual(view, { label: "QWEN 3.6", rows: [{ label: "5H", percent: 20, reset: "2H 0M" }, { label: "MONTH", percent: 50, reset: "5H 30M" }], stale: false });
 });
 
 test("window labels: weekly, hourly and monthly", () => {
   assert.equal(buildNanModelKeyView(usage(), { model: "weekly-thing-long-name" }, NOW).rows[0]?.label, "WEEK");
   assert.equal(buildNanModelKeyView(usage(), { model: "weekly-thing-long-name" }, NOW).label, "WEEKLY-THI…");
   assert.equal(buildNanModelKeyView(usage(), { model: "monthly-cap" }, NOW).rows[0]?.label, "MONTH");
+  assert.equal(buildNanModelKeyView(usage(), { model: "weekly-thing-long-name" }, NOW).rows[1]?.label, "MONTH");
 });
 
 test("uncapped model has no percent and shows compact value", () => {
