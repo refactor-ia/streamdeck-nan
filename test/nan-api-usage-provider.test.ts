@@ -89,6 +89,32 @@ test("429 carries a bounded retry-after delay", async () => {
   await assert.rejects(missing.getUsage(KEY), (error: NanApiUsageError) => error.kind === "rate-limited" && error.retryAfterMs === 60_000);
 });
 
+for (const [label, value, expected] of [
+  ["future HTTP-date", "Wed, 14 Oct 2026 18:32:00 GMT", 120_000],
+  ["past HTTP-date", "Wed, 14 Oct 2026 18:29:00 GMT", 0],
+  ["capped HTTP-date", "Wed, 14 Oct 2026 20:30:00 GMT", 3_600_000],
+  ["empty", "", 60_000],
+  ["whitespace", "   \t", 60_000],
+  ["negative", "-1", 60_000],
+  ["invalid", "not a date", 60_000],
+  ["non-finite", "Infinity", 60_000],
+  ["zero seconds", "0", 0],
+  ["fractional seconds", "0.5", 500],
+] as const) {
+  test(`429 retry-after handles ${label}`, async () => {
+    const clock = { setTimeout, clearTimeout, now: () => NOW().getTime() };
+    const client = new NanApiUsageClient(fetchOf(() => new Response("{}", {
+      status: 429, headers: { "retry-after": value },
+    })), clock, NOW);
+    await assert.rejects(client.getUsage(KEY), (error: NanApiUsageError) => {
+      assert.ok(error instanceof NanApiUsageError);
+      assert.equal(error.kind, "rate-limited");
+      assert.equal(error.retryAfterMs, expected);
+      return true;
+    });
+  });
+}
+
 test("an unsafe key is rejected before any request is made", async () => {
   const calls: Recorded[] = [];
   const client = new NanApiUsageClient(fetchOf(() => json(report), calls), undefined, NOW);
