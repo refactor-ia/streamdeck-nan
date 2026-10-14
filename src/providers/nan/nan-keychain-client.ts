@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const NAN_KEYCHAIN_TIMEOUT_MS = 2_000;
-export const NAN_KEYCHAIN_IMPORT_TIMEOUT_MS = 30_000;
 export const NAN_KEYCHAIN_MAX_STDIN_BYTES = 8 * 1024;
 const NAN_KEYCHAIN_MAX_STDOUT_BYTES = 8 * 1024;
 
@@ -44,10 +43,6 @@ export class NanKeychainClient {
 
   async deleteSessionCache(): Promise<void> {
     await this.request({ operation: "delete" }, false, NAN_KEYCHAIN_TIMEOUT_MS);
-  }
-
-  async getChromeSafeStorage(): Promise<string | null> {
-    return this.request({ operation: "getChromeSafeStorage" }, true, NAN_KEYCHAIN_IMPORT_TIMEOUT_MS);
   }
 
   private request(payload: Record<string, unknown>, expectsSecret: true, timeoutMs: number): Promise<string | null>;

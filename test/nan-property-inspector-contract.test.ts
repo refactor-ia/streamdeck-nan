@@ -114,7 +114,7 @@ test("NaN model and total keypad panels stay isolated from dial and refresh cont
 
 test("NaN Dashboard branding and launcher use migrated identities and external dials", () => {
   assert.equal(manifest.Name, "NaN Dashboard");
-  assert.equal(manifest.Description, "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Imports your NaN session securely from Chrome. Includes Claude, Codex and an experimental Grok monitor.");
+  assert.equal(manifest.Description, "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Connects with your personal NaN API key, stored in the macOS Keychain. Includes Claude, Codex and an experimental Grok monitor.");
   assert.equal(manifest.SupportURL, "https://github.com/refactor-ia/streamdeck-nan/issues");
   assert.equal(manifest.CategoryIcon, "imgs/plugin/nan-category");
   assert.equal(manifest.Actions.find((action) => action.UUID === "com.refactor-ia.nan.nan-demo").Icon, "imgs/actions/nan-usage/nan-usage");

@@ -5,7 +5,7 @@
   "Version": "1.0.11.0",
   "Author": "Refactor IA",
   "URL": "https://github.com/refactor-ia/streamdeck-nan",
-  "Description": "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Imports your NaN session securely from Chrome. Includes Claude, Codex and an experimental Grok monitor.",
+  "Description": "Track your NaN Dashboard AI usage from Stream Deck: a Stream Deck+ dial plus keypad actions for quota, per-model consumption and total/monthly tokens. Connects with your personal NaN API key, stored in the macOS Keychain. Includes Claude, Codex and an experimental Grok monitor.",
   "Icon": "imgs/plugin/nan-dashboard",
   "Category": "NaN Dashboard",
   "CategoryIcon": "imgs/plugin/nan-category",

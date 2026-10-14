@@ -111,8 +111,8 @@ test("root documentation names active boundaries without retired packages", asyn
 
 test("Apple release retirement leaves native build and integrity controls active", async () => {
   for (const path of [
-    "src/providers/nan/nan-dashboard-http.ts",
-    "src/providers/nan/nan-dashboard-session-store.ts",
+    "src/providers/nan/nan-api-http.ts",
+    "src/providers/nan/nan-api-key-store.ts",
     "src/providers/nan/nan-keychain-client.ts",
     "scripts/build-nan-keychain.mjs",
   ]) assert.equal(await exists(path), true, `required active boundary is missing: ${path}`);

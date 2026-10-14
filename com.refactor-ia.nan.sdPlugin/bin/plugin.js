@@ -11398,7 +11398,6 @@ let GrokUsage = (() => {
 })();
 
 const NAN_KEYCHAIN_TIMEOUT_MS = 2_000;
-const NAN_KEYCHAIN_IMPORT_TIMEOUT_MS = 30_000;
 const NAN_KEYCHAIN_MAX_STDIN_BYTES = 8 * 1024;
 const NAN_KEYCHAIN_MAX_STDOUT_BYTES = 8 * 1024;
 function resolveNanKeychainHelperPath(moduleUrl) {
@@ -11419,9 +11418,6 @@ class NanKeychainClient {
     }
     async deleteSessionCache() {
         await this.request({ operation: "delete" }, false, NAN_KEYCHAIN_TIMEOUT_MS);
-    }
-    async getChromeSafeStorage() {
-        return this.request({ operation: "getChromeSafeStorage" }, true, NAN_KEYCHAIN_IMPORT_TIMEOUT_MS);
     }
     async request(payload, expectsSecret, timeoutMs) {
         const stdin = `${JSON.stringify(payload)}\n`;
@@ -11525,7 +11521,7 @@ class NanApiKeyStore {
         catch {
             throw unavailable$1();
         }
-        // Entries left by the removed cookie-session cache are JSON, never valid API keys.
+        // Entries left by the previous session-based release are JSON, never valid API keys.
         return value !== null && isValidNanApiKey(value) ? value : undefined;
     }
     async write(key) {

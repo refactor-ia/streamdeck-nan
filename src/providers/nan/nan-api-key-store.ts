@@ -30,7 +30,7 @@ export class NanApiKeyStore {
   async read(): Promise<string | undefined> {
     let value: string | null;
     try { value = await this.keychain.getSessionCache(); } catch { throw unavailable(); }
-    // Entries left by the removed cookie-session cache are JSON, never valid API keys.
+    // Entries left by the previous session-based release are JSON, never valid API keys.
     return value !== null && isValidNanApiKey(value) ? value : undefined;
   }
 

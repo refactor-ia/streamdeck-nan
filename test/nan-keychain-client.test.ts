@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  NAN_KEYCHAIN_IMPORT_TIMEOUT_MS,
   NAN_KEYCHAIN_MAX_STDIN_BYTES,
   NAN_KEYCHAIN_TIMEOUT_MS,
   NanKeychainClient,
@@ -39,27 +38,8 @@ test("NaN Keychain client denies authentication UI for background secret reads",
   });
 
   assert.equal(await client.getSessionCache(), "value");
-  assert.equal(await client.getChromeSafeStorage(), "value");
-  assert.deepEqual(requests.map(({ stdin }) => stdin), [
-    "{\"operation\":\"get\"}\n",
-    "{\"operation\":\"getChromeSafeStorage\"}\n",
-  ]);
-});
-
-test("NaN Keychain client gives only explicit Chrome import a bounded human-response timeout", async () => {
-  const requests: Array<{ stdin: string; timeoutMs: number }> = [];
-  const client = new NanKeychainClient(async (request) => {
-    requests.push(request);
-    return { exitCode: 0, stdout: "{\"ok\":true,\"secret\":null}" };
-  });
-
-  assert.equal(await client.getSessionCache(), null);
-  assert.equal(await client.getChromeSafeStorage(), null);
-  assert.deepEqual(requests.map(({ stdin, timeoutMs }) => ({ stdin, timeoutMs })), [
-    { stdin: "{\"operation\":\"get\"}\n", timeoutMs: NAN_KEYCHAIN_TIMEOUT_MS },
-    { stdin: "{\"operation\":\"getChromeSafeStorage\"}\n", timeoutMs: NAN_KEYCHAIN_IMPORT_TIMEOUT_MS },
-  ]);
-  assert.equal(NAN_KEYCHAIN_IMPORT_TIMEOUT_MS > NAN_KEYCHAIN_TIMEOUT_MS, true);
+  assert.deepEqual(requests.map(({ stdin }) => stdin), ["{\"operation\":\"get\"}\n"]);
+  assert.equal("getChromeSafeStorage" in client, false, "the browser-secret read is gone");
 });
 
 test("NaN Keychain client fails closed without exposing helper output", async () => {
