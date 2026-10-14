@@ -3,7 +3,7 @@ import test from "node:test";
 import { registerHooks } from "node:module";
 import { streamDeck, type KeyAction } from "@elgato/streamdeck";
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
-import { createImportChromeSessionResult } from "../src/actions/nan-chrome-import-message.js";
+import { createApiKeyResult } from "../src/actions/nan-api-key-message.js";
 
 const actionUrl = new URL("../src/actions/nan-model-usage.ts", import.meta.url);
 registerHooks({
@@ -73,37 +73,30 @@ test("initial model request awaits the shared dashboard read and unions exact mo
   }]);
 });
 
-test("model key imports only exact messages from its current visible Key and redraws shared results", async () => {
+test("model key accepts API key messages only from its current visible Key", async () => {
   const dashboard = new ImportDashboard();
-  const images: string[] = [];
-  const current = fakeKey("current", images);
-  const stale = fakeKey("stale", images);
-  const nonKey = { ...fakeKey("dial", images), isKey: () => false };
+  const current = fakeKey("current");
+  const stale = fakeKey("stale");
+  const nonKey = { ...fakeKey("dial"), isKey: () => false };
   const { NanModelUsage } = await loadNanModelUsage();
   const subject = new NanModelUsage(dashboard);
-
   await subject.onWillAppear({ action: current, payload: { settings: {} } } as never);
-  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1", extra: true } } as never);
+  const save = { kind: "nan.saveApiKey.v1", requestId: "r1", apiKey: "sk-1" };
+
+  await subject.onSendToPlugin({ action: current, payload: { ...save, extra: true } } as never);
   await subject.onSendToPlugin({ action: current, payload: { kind: "unrelated" } } as never);
-  await subject.onSendToPlugin({ action: nonKey, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  await subject.onSendToPlugin({ action: stale, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  assert.equal(dashboard.imports, 0);
+  await subject.onSendToPlugin({ action: nonKey, payload: save } as never);
+  await subject.onSendToPlugin({ action: stale, payload: save } as never);
+  assert.equal(dashboard.saved, 0);
 
-  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  assert.equal(dashboard.imports, 1);
-  assert.equal(images.length, 2, "the shared ready notification redraws the current key");
-
-  dashboard.result = { source: "dashboard", stale: false, error: "import-unavailable" };
-  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  assert.equal(dashboard.imports, 2);
-  assert.equal(images.length, 3, "the shared failure notification redraws the current key");
-
+  await subject.onSendToPlugin({ action: current, payload: save } as never);
+  assert.equal(dashboard.saved, 1);
   subject.onWillDisappear({ action: current } as never);
-  await subject.onSendToPlugin({ action: current, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  assert.equal(dashboard.imports, 2);
+  await subject.onSendToPlugin({ action: current, payload: save } as never);
+  assert.equal(dashboard.saved, 1);
 });
 
-test("model key correlates ready, failed, and busy imports without leaking data or replying to a stale inspector", async (t) => {
+test("model key correlates saved, invalid, and cleared outcomes without leaking data or replying to a stale inspector", async (t) => {
   const dashboard = new ImportDashboard();
   const sent: unknown[] = [];
   const key = fakeKey("current");
@@ -112,28 +105,21 @@ test("model key correlates ready, failed, and busy imports without leaking data 
   const subject = new NanModelUsage(dashboard);
   await subject.onWillAppear({ action: key, payload: { settings: {} } } as never);
 
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "bad id" } } as never);
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "valid_1", extra: "sentinel-secret" } } as never);
-  assert.equal(dashboard.imports, 0, "malformed requests never acquire Chrome data");
-
-  dashboard.importResult = { state: "import-busy" };
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "busy_1" } } as never);
-  dashboard.importResult = { state: "import-unavailable" };
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "failed_1" } } as never);
-  dashboard.importResult = { state: "ready", quota: quotaUsage.quota };
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "ready_1" } } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.saveApiKey.v1", requestId: "saved_1", apiKey: "sk-secret" } } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.saveApiKey.v1", requestId: "invalid_1", apiKey: "bad key" } } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.clearApiKey.v1", requestId: "cleared_1" } } as never);
   assert.deepEqual(sent, [
-    createImportChromeSessionResult("busy_1", "busy"),
-    createImportChromeSessionResult("failed_1", "failed"),
-    createImportChromeSessionResult("ready_1", "ready"),
+    createApiKeyResult("saved_1", "saved"),
+    createApiKeyResult("invalid_1", "invalid"),
+    createApiKeyResult("cleared_1", "cleared"),
   ]);
-  assert.equal(JSON.stringify(sent).includes("sentinel-secret"), false);
+  assert.equal(JSON.stringify(sent).includes("sk-secret"), false);
 
   (streamDeck.ui as unknown as { action: KeyAction }).action = fakeKey("reopened");
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "foreign_1" } } as never);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.clearApiKey.v1", requestId: "foreign_1" } } as never);
   subject.onWillDisappear({ action: key } as never);
-  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.importChromeSession.v1", requestId: "stale_1" } } as never);
-  assert.equal(sent.some((payload) => (payload as { requestId?: string }).requestId === "foreign_1" || (payload as { requestId?: string }).requestId === "stale_1"), false);
+  await subject.onSendToPlugin({ action: key, payload: { kind: "nan.clearApiKey.v1", requestId: "stale_1" } } as never);
+  assert.equal(sent.some((payload) => ["foreign_1", "stale_1"].includes((payload as { requestId?: string }).requestId ?? "")), false);
 });
 
 test("initial model request suppresses a payload after its inspector and appearance become stale", async (t) => {
@@ -176,9 +162,7 @@ class FakeDashboard {
 }
 
 class ImportDashboard {
-  imports = 0;
-  result: NanDashboardUsage = quotaUsage;
-  importResult: { state: "ready"; quota?: NanDashboardUsage["quota"] } | { state: "import-busy" | "import-unavailable" } = { state: "ready", quota: quotaUsage.quota };
+  saved = 0;
   private readonly listeners = new Set<(usage: NanDashboardUsage) => void>();
 
   subscribe(listener: (usage: NanDashboardUsage) => void): () => void {
@@ -187,11 +171,8 @@ class ImportDashboard {
   }
   async getUsage(): Promise<NanDashboardUsage> { return emptyUsage; }
   getCachedUsage(): NanDashboardUsage { return emptyUsage; }
-  async importChromeSession(): Promise<{ state: "ready"; quota?: NanDashboardUsage["quota"] } | { state: "import-busy" | "import-unavailable" }> {
-    this.imports += 1;
-    for (const listener of this.listeners) listener(this.result);
-    return this.importResult;
-  }
+  async saveApiKey(): Promise<"saved"> { this.saved += 1; return "saved"; }
+  async clearApiKey(): Promise<"cleared"> { return "cleared"; }
 }
 
 function fakeKey(id: string, images?: string[]): KeyAction<Record<string, never>> {

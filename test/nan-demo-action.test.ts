@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { registerHooks } from "node:module";
 import { streamDeck, type DialAction } from "@elgato/streamdeck";
-import { createImportChromeSessionResult, parseImportChromeSessionMessage } from "../src/actions/nan-chrome-import-message.js";
+import { createApiKeyResult } from "../src/actions/nan-api-key-message.js";
 import { NanDashboardController } from "../src/actions/nan-dashboard-controller.js";
 
 const actionUrl = new URL("../src/actions/nan-demo-usage.ts", import.meta.url);
@@ -26,7 +26,6 @@ type NanDemoUsage = {
 function loadNanDemoUsage(): Promise<{ NanDemoUsage: new (dashboard: unknown) => NanDemoUsage }> {
   return import(actionUrl.href) as Promise<{ NanDemoUsage: new (dashboard: unknown) => NanDemoUsage }>;
 }
-const importMessageSource = readFileSync("src/actions/nan-chrome-import-message.ts", "utf8");
 
 test("NaN runtime constructs only the dashboard controller and keeps the dial UUID", () => {
   const plugin = readFileSync("src/plugin.ts", "utf8");
@@ -45,35 +44,19 @@ test("legacy source migration uses the existing ordered write queue and preserve
   assert.doesNotMatch(actionSource, /migrateNanLiveSettings|readAndMigrateCurrentNanSettings|persistNanLiveInitialization/);
 });
 
-test("appearance, refresh, rotation, settings, and wake use cached/dashboard reads; only the exact UI message imports", () => {
+test("appearance, refresh, rotation, settings, and wake use cached/dashboard reads; only the exact UI message touches the API key", () => {
   assert.match(actionSource, /onWillAppear[\s\S]*activateOnAppearance[\s\S]*migrateLegacySource/);
   assert.match(actionSource, /onDidReceiveSettings[\s\S]*getCachedUsage/);
   assert.match(actionSource, /onDialRotate[\s\S]*getCachedUsage/);
   assert.match(actionSource, /updateDisplay[\s\S]*this\.dashboard\.getUsage/);
-  assert.match(actionSource, /parseImportChromeSessionMessage/);
-  assert.match(actionSource, /createImportChromeSessionResult/);
   const beforeSend = actionSource.slice(0, actionSource.indexOf("onSendToPlugin"));
-  assert.doesNotMatch(beforeSend, /importChromeSession\(/);
+  assert.doesNotMatch(beforeSend, /saveApiKey\(|clearApiKey\(/);
   const sendHandler = actionSource.slice(actionSource.indexOf("onSendToPlugin"), actionSource.indexOf("onWillDisappear"));
-  assert.match(sendHandler, /parseImportChromeSessionMessage[\s\S]*this\.dashboard\.importChromeSession\(\)/);
-  assert.match(sendHandler, /result\.state === "import-busy" \? "busy" : "failed"/);
+  assert.match(sendHandler, /handleNanApiKeyMessage\(ev\.payload, this\.dashboard\)/);
+  assert.doesNotMatch(actionSource, /Chrome|importChromeSession/);
 });
 
-test("shared Chrome-import protocol accepts legacy requests or exact correlated requests and emits an allowlisted result", () => {
-  assert.match(importMessageSource, /export function parseImportChromeSessionMessage/);
-  assert.match(importMessageSource, /\^\[A-Za-z0-9_-\]\{1,64\}\$/);
-  assert.deepEqual(parseImportChromeSessionMessage({ kind: "nan.importChromeSession.v1" }), { kind: "nan.importChromeSession.v1" });
-  assert.deepEqual(parseImportChromeSessionMessage({ kind: "nan.importChromeSession.v1", requestId: "request_1" }), { kind: "nan.importChromeSession.v1", requestId: "request_1" });
-  for (const payload of [undefined, null, "nan.importChromeSession.v1", {}, { kind: "other" }, { kind: "nan.importChromeSession.v1", requestId: "" }, { kind: "nan.importChromeSession.v1", requestId: "bad id" }, { kind: "nan.importChromeSession.v1", requestId: "x", extra: true }]) {
-    assert.equal(parseImportChromeSessionMessage(payload), undefined);
-  }
-  const result = createImportChromeSessionResult("request_1", "failed");
-  assert.deepEqual(result, { kind: "nan.importChromeSession.result.v1", requestId: "request_1", outcome: "failed" });
-  assert.equal(JSON.stringify(result).includes("sentinel-secret"), false);
-  assert.deepEqual(Object.keys(result).sort(), ["kind", "outcome", "requestId"]);
-});
-
-test("dial sends a correlated terminal result only to its current inspector and retains legacy behavior", async (t) => {
+test("dial sends a correlated terminal result only to its current inspector", async (t) => {
   const sent: unknown[] = [];
   const dashboard = new ImportDashboard();
   const dial = fakeDial("dial");
@@ -82,57 +65,61 @@ test("dial sends a correlated terminal result only to its current inspector and 
   const subject = new NanDemoUsage(dashboard);
   await subject.onWillAppear({ action: dial, payload: { settings: { autoRefresh: false } } } as never);
 
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1" } } as never);
-  assert.equal(dashboard.imports, 1);
-  assert.deepEqual(sent, [], "legacy requests do not receive a correlated response");
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "unrelated" } } as never);
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.saveApiKey.v1", requestId: "bad id", apiKey: "sk-1" } } as never);
+  assert.deepEqual(dashboard.saved, []);
+  assert.deepEqual(sent, []);
 
-  dashboard.result = { state: "import-busy" };
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1", requestId: "busy_1" } } as never);
-  assert.deepEqual(sent, [createImportChromeSessionResult("busy_1", "busy")]);
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.saveApiKey.v1", requestId: "save_1", apiKey: "sk-1" } } as never);
+  assert.deepEqual(dashboard.saved, ["sk-1"]);
+  assert.deepEqual(sent, [createApiKeyResult("save_1", "saved")]);
 
-  dashboard.result = { state: "import-unavailable" };
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1", requestId: "failed_1" } } as never);
-  assert.deepEqual(sent.at(-1), createImportChromeSessionResult("failed_1", "failed"));
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.saveApiKey.v1", requestId: "invalid_1", apiKey: "bad key" } } as never);
+  assert.deepEqual(sent.at(-1), createApiKeyResult("invalid_1", "invalid"));
+  assert.deepEqual(dashboard.saved, ["sk-1"]);
 
   dashboard.throws = true;
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1", requestId: "caught_1" } } as never);
-  assert.deepEqual(sent.at(-1), createImportChromeSessionResult("caught_1", "failed"));
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.clearApiKey.v1", requestId: "caught_1" } } as never);
+  assert.deepEqual(sent.at(-1), createApiKeyResult("caught_1", "failed"));
+  assert.equal(JSON.stringify(sent).includes("sentinel-secret"), false);
   dashboard.throws = false;
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.clearApiKey.v1", requestId: "clear_1" } } as never);
+  assert.deepEqual(sent.at(-1), createApiKeyResult("clear_1", "cleared"));
 
   (streamDeck.ui as unknown as { action: DialAction }).action = fakeDial("other");
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1", requestId: "foreign_1" } } as never);
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.clearApiKey.v1", requestId: "foreign_1" } } as never);
   assert.equal(sent.some((payload) => (payload as { requestId?: string }).requestId === "foreign_1"), false);
 
   subject.onWillDisappear({ action: dial } as never);
-  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.importChromeSession.v1", requestId: "stale_1" } } as never);
+  await subject.onSendToPlugin({ action: dial, payload: { kind: "nan.clearApiKey.v1", requestId: "stale_1" } } as never);
   assert.equal(sent.some((payload) => (payload as { requestId?: string }).requestId === "stale_1"), false);
 });
 
-test("shared controller reports typed busy without replacing the accepted import", async () => {
-  let release!: () => void;
-  let imports = 0;
-  const controller = new NanDashboardController(
-    { getCachedDashboard: async () => ({ state: "needs-import" }), validateAndStore: async () => ({ state: "needs-import" }) } as never,
-    { importCandidates: async () => { imports += 1; await new Promise<void>((resolve) => { release = resolve; }); return []; } } as never,
-  );
-  const accepted = controller.importChromeSession();
-  const competing = await controller.importChromeSession();
-  assert.deepEqual(competing, { state: "import-busy" });
-  assert.equal(imports, 1);
-  release();
-  assert.deepEqual(await accepted, { state: "needs-import" });
+test("shared controller stores and clears the API key through its store and reports failures generically", async () => {
+  const calls: string[] = [];
+  let fail = false;
+  const store = {
+    write: async (key: string) => { if (fail) throw new Error(key); calls.push(`write:${key}`); },
+    clear: async () => { if (fail) throw new Error("x"); calls.push("clear"); },
+  };
+  const controller = new NanDashboardController(undefined, undefined, undefined, store);
+  assert.equal(await controller.saveApiKey("sk-1"), "saved");
+  assert.equal(await controller.clearApiKey(), "cleared");
+  fail = true;
+  assert.equal(await controller.saveApiKey("sk-2"), "failed");
+  assert.equal(await controller.clearApiKey(), "failed");
+  assert.deepEqual(calls, ["write:sk-1", "clear"]);
 });
 
 class ImportDashboard {
-  imports = 0;
+  saved: string[] = [];
   throws = false;
-  result: { state: "ready" } | { state: "import-busy" | "import-unavailable" } = { state: "ready" };
   async getUsage(): Promise<{ source: "dashboard"; stale: false }> { return { source: "dashboard", stale: false }; }
   getCachedUsage(): { source: "dashboard"; stale: false } { return { source: "dashboard", stale: false }; }
-  async importChromeSession(): Promise<typeof this.result> {
-    this.imports += 1;
+  async saveApiKey(key: string): Promise<"saved"> { this.saved.push(key); return "saved"; }
+  async clearApiKey(): Promise<"cleared"> {
     if (this.throws) throw new Error("sentinel-secret");
-    return this.result;
+    return "cleared";
   }
 }
 

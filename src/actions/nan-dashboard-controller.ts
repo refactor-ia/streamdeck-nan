@@ -1,4 +1,5 @@
 import { NanChromeImportError, NanChromeCookieImporter, type NanChromeCookieCandidate } from "../providers/nan/nan-chrome-cookie-importer.js";
+import { NanApiKeyStore } from "../providers/nan/nan-api-key-store.js";
 import { NanDashboardSessionStore, type BrowserCookieRecord, type NanDashboardSessionResult, type NanDashboardSnapshotResult } from "../providers/nan/nan-dashboard-session-store.js";
 import type { NanDashboardMetricsSnapshot } from "../providers/nan/nan-dashboard-metrics-provider.js";
 import type { NanDashboardQuota } from "../providers/nan/nan-dashboard-quota-provider.js";
@@ -24,6 +25,10 @@ interface SessionStore {
   getCachedDashboard(): Promise<NanDashboardSnapshotResult>;
   validateAndStore(cookies: readonly BrowserCookieRecord[]): Promise<NanDashboardSessionResult>;
 }
+interface ApiKeys {
+  write(key: string): Promise<void>;
+  clear(): Promise<void>;
+}
 interface CookieImporter {
   importCandidates(): Promise<readonly NanChromeCookieCandidate[]>;
 }
@@ -48,15 +53,27 @@ export class NanDashboardController {
   private readonly sessions: SessionStore;
   private readonly importer: CookieImporter;
   private readonly watchScheduler: NanDashboardWatchScheduler;
+  private readonly apiKeys: ApiKeys;
 
   constructor(
     sessions: SessionStore = new NanDashboardSessionStore(),
     importer: CookieImporter = new NanChromeCookieImporter(),
     watchScheduler: NanDashboardWatchScheduler = defaultWatchScheduler,
+    apiKeys: ApiKeys = new NanApiKeyStore(),
   ) {
+    this.apiKeys = apiKeys;
     this.sessions = sessions;
     this.importer = importer;
     this.watchScheduler = watchScheduler;
+  }
+
+  /** Stores the personal API key in the Keychain only; the key is never cached or logged here. */
+  async saveApiKey(key: string): Promise<"saved" | "failed"> {
+    try { await this.apiKeys.write(key); return "saved"; } catch { return "failed"; }
+  }
+
+  async clearApiKey(): Promise<"cleared" | "failed"> {
+    try { await this.apiKeys.clear(); return "cleared"; } catch { return "failed"; }
   }
 
   isImporting(): boolean { return this.importInFlight !== undefined; }

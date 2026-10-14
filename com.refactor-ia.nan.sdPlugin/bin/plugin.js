@@ -10049,9 +10049,6 @@ function renderNanDashboardFeedback(state, settings) {
         return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
     return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
 }
-function renderNanImportProgress() {
-    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "IMPORTING" };
-}
 function dashboardStatus(error) {
     switch (error) {
         case "needs-import": return "IMPORT SESSION";
@@ -11434,7 +11431,7 @@ class NanKeychainClient {
     async request(payload, expectsSecret, timeoutMs) {
         const stdin = `${JSON.stringify(payload)}\n`;
         if (Buffer.byteLength(stdin, "utf8") > NAN_KEYCHAIN_MAX_STDIN_BYTES)
-            throw unavailable$1();
+            throw unavailable$2();
         let result;
         try {
             result = await this.run({
@@ -11446,23 +11443,23 @@ class NanKeychainClient {
             });
         }
         catch {
-            throw unavailable$1();
+            throw unavailable$2();
         }
         if (result.exitCode !== 0 || Buffer.byteLength(result.stdout, "utf8") > NAN_KEYCHAIN_MAX_STDOUT_BYTES)
-            throw unavailable$1();
+            throw unavailable$2();
         let response;
         try {
             response = JSON.parse(result.stdout);
         }
         catch {
-            throw unavailable$1();
+            throw unavailable$2();
         }
         if (!isRecord$3(response) || response.ok !== true)
-            throw unavailable$1();
+            throw unavailable$2();
         if (!expectsSecret)
             return;
         if (typeof response.secret !== "string" && response.secret !== null)
-            throw unavailable$1();
+            throw unavailable$2();
         return response.secret;
     }
 }
@@ -11486,7 +11483,7 @@ function runNanKeychain(request) {
         };
         const fail = () => finish(() => {
             child.kill("SIGKILL");
-            reject(unavailable$1());
+            reject(unavailable$2());
         });
         const timeout = setTimeout(fail, request.timeoutMs);
         child.once("error", fail);
@@ -11501,7 +11498,7 @@ function runNanKeychain(request) {
         child.stdin.end(request.stdin, "utf8");
     });
 }
-function unavailable$1() {
+function unavailable$2() {
     return new Error("Keychain helper unavailable");
 }
 function isRecord$3(value) {
@@ -11796,6 +11793,57 @@ function inside(parent, child) {
 }
 function isNotFound(error) {
     return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+const MAX_API_KEY_BYTES = 256;
+/** Header-safe printable ASCII without whitespace, quotes, braces or backslashes, so the key can only ever be a bearer token. */
+function isValidNanApiKey(value) {
+    return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= MAX_API_KEY_BYTES
+        && /^[\x21\x23-\x5b\x5d-\x7a\x7c\x7e]+$/.test(value);
+}
+/**
+ * Persists the personal NaN API key only in the macOS Keychain, through the bundled helper
+ * (secret travels over stdin, never argv). The key is never logged, returned in errors, or
+ * written to Stream Deck settings.
+ */
+class NanApiKeyStore {
+    keychain;
+    constructor(keychain = new NanKeychainClient()) {
+        this.keychain = keychain;
+    }
+    /** undefined: nothing usable stored. Throws a generic error when the Keychain is unreachable. */
+    async read() {
+        let value;
+        try {
+            value = await this.keychain.getSessionCache();
+        }
+        catch {
+            throw unavailable$1();
+        }
+        // Entries left by the removed cookie-session cache are JSON, never valid API keys.
+        return value !== null && isValidNanApiKey(value) ? value : undefined;
+    }
+    async write(key) {
+        if (!isValidNanApiKey(key))
+            throw new Error("Invalid NaN API key");
+        try {
+            await this.keychain.putSessionCache(key);
+        }
+        catch {
+            throw unavailable$1();
+        }
+    }
+    async clear() {
+        try {
+            await this.keychain.deleteSessionCache();
+        }
+        catch {
+            throw unavailable$1();
+        }
+    }
+}
+function unavailable$1() {
+    return new Error("Keychain unavailable");
 }
 
 const NAN_DASHBOARD_QUOTA_URL$1 = "https://cloud-api.nan.builders/api/usage/quota";
@@ -12318,10 +12366,31 @@ class NanDashboardController {
     sessions;
     importer;
     watchScheduler;
-    constructor(sessions = new NanDashboardSessionStore(), importer = new NanChromeCookieImporter(), watchScheduler = defaultWatchScheduler) {
+    apiKeys;
+    constructor(sessions = new NanDashboardSessionStore(), importer = new NanChromeCookieImporter(), watchScheduler = defaultWatchScheduler, apiKeys = new NanApiKeyStore()) {
+        this.apiKeys = apiKeys;
         this.sessions = sessions;
         this.importer = importer;
         this.watchScheduler = watchScheduler;
+    }
+    /** Stores the personal API key in the Keychain only; the key is never cached or logged here. */
+    async saveApiKey(key) {
+        try {
+            await this.apiKeys.write(key);
+            return "saved";
+        }
+        catch {
+            return "failed";
+        }
+    }
+    async clearApiKey() {
+        try {
+            await this.apiKeys.clear();
+            return "cleared";
+        }
+        catch {
+            return "failed";
+        }
     }
     isImporting() { return this.importInFlight !== undefined; }
     isDashboardWatched() { return this.dashboardWatchers.size > 0; }
@@ -12483,25 +12552,48 @@ const defaultWatchScheduler = {
     clearInterval: (timer) => clearInterval(timer),
 };
 
-const IMPORT_CHROME_SESSION_KIND = "nan.importChromeSession.v1";
-const IMPORT_CHROME_SESSION_RESULT_KIND = "nan.importChromeSession.result.v1";
+const SAVE_API_KEY_KIND = "nan.saveApiKey.v1";
+const CLEAR_API_KEY_KIND = "nan.clearApiKey.v1";
+const API_KEY_RESULT_KIND = "nan.apiKey.result.v1";
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
-/** Parses an explicit legacy request or an exact correlated request before Chrome acquisition. */
-function parseImportChromeSessionMessage(payload) {
-    if (typeof payload !== "object" || payload === null || payload.kind !== IMPORT_CHROME_SESSION_KIND)
+/** Accepts only exact, correlated save/clear requests from the property inspector. */
+function parseApiKeyMessage(payload) {
+    if (typeof payload !== "object" || payload === null)
         return undefined;
-    const keys = Object.keys(payload);
-    if (keys.length === 1)
-        return { kind: IMPORT_CHROME_SESSION_KIND };
-    const requestId = payload.requestId;
-    if (keys.length === 2 && typeof requestId === "string" && REQUEST_ID.test(requestId)) {
-        return { kind: IMPORT_CHROME_SESSION_KIND, requestId };
-    }
+    const { kind, requestId, apiKey } = payload;
+    if (typeof requestId !== "string" || !REQUEST_ID.test(requestId))
+        return undefined;
+    const keys = Object.keys(payload).length;
+    if (kind === SAVE_API_KEY_KIND && keys === 3 && typeof apiKey === "string")
+        return { kind, requestId, apiKey };
+    if (kind === CLEAR_API_KEY_KIND && keys === 2)
+        return { kind, requestId };
     return undefined;
 }
-/** Produces the only data shape sent back to the originating property inspector. */
-function createImportChromeSessionResult(requestId, outcome) {
-    return { kind: IMPORT_CHROME_SESSION_RESULT_KIND, requestId, outcome };
+function createApiKeyResult(requestId, outcome) {
+    return { kind: API_KEY_RESULT_KIND, requestId, outcome };
+}
+/** Returns the reply for the originating inspector, or undefined when the payload is not an API key request. */
+async function handleNanApiKeyMessage(payload, controller) {
+    const request = parseApiKeyMessage(payload);
+    if (!request)
+        return undefined;
+    if (request.kind === CLEAR_API_KEY_KIND) {
+        try {
+            return createApiKeyResult(request.requestId, await controller.clearApiKey());
+        }
+        catch {
+            return createApiKeyResult(request.requestId, "failed");
+        }
+    }
+    if (!isValidNanApiKey(request.apiKey))
+        return createApiKeyResult(request.requestId, "invalid");
+    try {
+        return createApiKeyResult(request.requestId, await controller.saveApiKey(request.apiKey));
+    }
+    catch {
+        return createApiKeyResult(request.requestId, "failed");
+    }
 }
 
 let NanDemoUsage = (() => {
@@ -12578,39 +12670,14 @@ let NanDemoUsage = (() => {
         async onSendToPlugin(ev) {
             if (!ev.action.isDial() || !this.hasActiveLifecycle(ev.action))
                 return;
-            const request = parseImportChromeSessionMessage(ev.payload);
-            if (!request)
-                return;
             const action = ev.action;
             const isCurrent = this.lifecycleGuard(action);
             const isSameAppearance = this.appearanceGuard(action);
-            if (!isCurrent())
-                return;
-            await action.setFeedback(renderNanImportProgress());
-            let result;
-            let outcome = "failed";
-            try {
-                result = await this.dashboard.importChromeSession();
-                outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
-            }
-            catch {
-                result = { state: "import-unavailable" };
-            }
-            if (!isCurrent() || !isSameAppearance())
-                return;
-            if (result) {
-                const settings = this.desiredSettings.get(action.id) ?? {};
-                await this.render(action, result.state === "ready"
-                    ? { source: "dashboard", quota: result.quota, stale: false }
-                    : { source: "dashboard", stale: false, error: result.state }, settings);
-            }
-            await this.sendImportResult(action, request, outcome, isCurrent, isSameAppearance);
-        }
-        async sendImportResult(action, request, outcome, isCurrent, isSameAppearance) {
-            if (!("requestId" in request) || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id)
+            const result = await handleNanApiKeyMessage(ev.payload, this.dashboard);
+            if (!result || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id)
                 return;
             try {
-                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+                await streamDeck.ui.sendToPropertyInspector(result);
             }
             catch { }
         }
@@ -12889,15 +12956,14 @@ let NanModelUsage = (() => {
         async onSendToPlugin(ev) {
             if (!ev.action.isKey() || !this.isCurrent(ev.action))
                 return;
-            const importRequest = parseImportChromeSessionMessage(ev.payload);
-            if (importRequest) {
-                let outcome = "failed";
-                try {
-                    const result = await this.dashboard.importChromeSession();
-                    outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+            const keyResult = await handleNanApiKeyMessage(ev.payload, this.dashboard);
+            if (keyResult) {
+                if (this.isCurrent(ev.action) && streamDeck.ui.action?.id === ev.action.id) {
+                    try {
+                        await streamDeck.ui.sendToPropertyInspector(keyResult);
+                    }
+                    catch { }
                 }
-                catch { }
-                await this.sendImportResult(ev.action, importRequest, outcome);
                 return;
             }
             if (isModelsRequest(ev.payload)) {
@@ -12930,14 +12996,6 @@ let NanModelUsage = (() => {
             if (this.visible.get(entry.action.id) !== entry)
                 return;
             await entry.action.setImage(image);
-        }
-        async sendImportResult(action, request, outcome) {
-            if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
-                return;
-            try {
-                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
-            }
-            catch { }
         }
         sendModels(action, usage) {
             // The SDK routes this only to its current property-inspector context; do not send a
@@ -13025,16 +13083,13 @@ class NanMetricsUsage extends SingletonAction {
     async onSendToPlugin(ev) {
         if (!ev.action.isKey() || !this.isCurrent(ev.action))
             return;
-        const request = parseImportChromeSessionMessage(ev.payload);
-        if (!request)
+        const result = await handleNanApiKeyMessage(ev.payload, this.dashboard);
+        if (!result || !this.isCurrent(ev.action) || streamDeck.ui.action?.id !== ev.action.id)
             return;
-        let outcome = "failed";
         try {
-            const result = await this.dashboard.importChromeSession();
-            outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+            await streamDeck.ui.sendToPropertyInspector(result);
         }
         catch { }
-        await this.sendImportResult(ev.action, request, outcome);
     }
     onWillDisappear(ev) {
         const entry = this.visible.get(ev.action.id);
@@ -13045,14 +13100,6 @@ class NanMetricsUsage extends SingletonAction {
     }
     isCurrent(action) {
         return this.visible.get(action.id)?.action === action;
-    }
-    async sendImportResult(action, request, outcome) {
-        if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
-            return;
-        try {
-            await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
-        }
-        catch { }
     }
     async redrawVisible(usage) {
         await Promise.all([...this.visible.values()].map((entry) => this.render(entry, usage)));

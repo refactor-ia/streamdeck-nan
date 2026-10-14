@@ -14,71 +14,88 @@ test("NaN encoder registration uses the migrated UUID and dashboard-only constru
   assert.equal(action.Controllers[0], "Encoder");
   assert.equal(action.Encoder.layout, "layouts/nan.json");
   assert.equal(layout.id, "NanUsage");
-  assert.equal(layout.items.find(({ key }: { key: string }) => key === "status").value, "IMPORT SESSION");
-  assert.match(plugin, /const nanDashboard = new NanDashboardController\(\)/);
+    assert.match(plugin, /const nanDashboard = new NanDashboardController\(\)/);
   assert.match(plugin, /const nanAction = new NanDemoUsage\(nanDashboard\)/);
   assert.match(plugin, /registerAction\(nanAction\)/);
 });
 
-test("NaN inspector exposes explicit dashboard import for the dial and all three data-display keys only", () => {
-  assert.match(inspector, /id="nanChromeImportSettings"/);
-  assert.match(inspector, /id="importChromeSession"/);
-  assert.match(inspector, /Dashboard quota uses an imported Chrome session/);
-  assert.match(inspector, /const isNanChromeImportAction = isNanDemo \|\| isNanModel \|\| isNanMetrics/);
-  assert.match(inspector, /#nanChromeImportSettings"\)\.hidden = !isNanChromeImportAction/);
-  assert.match(inspector, /id="importChromeSessionStatus" role="status" aria-live="polite"/);
-  assert.match(inspector, /const IMPORT_CHROME_SESSION_RESULT = "nan\.importChromeSession\.result\.v1"/);
-  assert.match(inspector, /const IMPORT_WATCHDOG_MS = 120_000/);
-  assert.match(inspector, /payload: \{ kind: IMPORT_CHROME_SESSION, requestId \}/);
-  assert.match(inspector, /pendingImportRequestId/);
-  assert.match(inspector, /socket\.addEventListener\("close"/);
-  assert.doesNotMatch(inspector, /nanSource|Legacy collector|collector-config|Keychain|cookie|https?:\/\//i);
+test("NaN inspector exposes an API key field for the dial and all three data-display keys only", () => {
+  assert.match(inspector, /id="nanApiKeySettings"/);
+  assert.match(inspector, /id="nanApiKey" type="password" autocomplete="off"/);
+  assert.match(inspector, /id="saveApiKey"/);
+  assert.match(inspector, /id="clearApiKey"/);
+  assert.match(inspector, /id="apiKeyStatus" role="status" aria-live="polite"/);
+  assert.match(inspector, /const isNanApiKeyAction = isNanDemo \|\| isNanModel \|\| isNanMetrics/);
+  assert.match(inspector, /#nanApiKeySettings"\)\.hidden = !isNanApiKeyAction/);
+  assert.match(inspector, /const API_KEY_RESULT = "nan\.apiKey\.result\.v1"/);
+  assert.match(inspector, /payload: \{ kind: SAVE_API_KEY, requestId, apiKey \}/);
+  assert.doesNotMatch(inspector, /Chrome|cookie|nanSource|Legacy collector|collector-config|https?:\/\//i);
+  assert.doesNotMatch(inspector, /setSettings", \{ context, payload: \{[^}]*apiKey/, "the key is never written to Stream Deck settings");
 });
 
-test("property inspector executes correlated import UI states without accepting foreign, stale, or malformed results", () => {
+test("property inspector executes correlated API key UI states without accepting foreign, stale, or malformed results", () => {
   const harness = createInspectorHarness();
   harness.connect("com.refactor-ia.nan.nan-demo");
   harness.socket.emit("open");
 
-  harness.clickImport();
-  const first = harness.lastImportRequest();
+  harness.clickSave();
+  assert.equal(harness.requests().length, 0, "an empty field sends nothing");
+  assert.equal(harness.status.textContent, "Enter your NaN API key first.");
+  harness.apiKey.value = "bad key";
+  harness.clickSave();
+  assert.equal(harness.requests().length, 0, "an invalid key is rejected locally");
+  assert.equal(harness.status.textContent, "That does not look like a valid API key.");
+
+  harness.apiKey.value = "sk-test-123";
+  harness.clickSave();
+  const first = harness.lastRequest();
+  assert.equal(first.kind, "nan.saveApiKey.v1");
+  assert.equal(first.apiKey, "sk-test-123");
   assert.match(first.requestId, /^[A-Za-z0-9_-]{1,64}$/);
-  assert.equal(harness.importButton.disabled, true);
-  assert.equal(harness.status.textContent, "Importing session from Chrome. Please wait.");
-  harness.clickImport();
-  assert.equal(harness.importRequests().length, 1, "a local duplicate click does not send again");
+  assert.equal(harness.saveButton.disabled, true);
+  harness.clickSave();
+  assert.equal(harness.requests().length, 1, "a local duplicate click does not send again");
 
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: "other", outcome: "ready" });
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: first.requestId, outcome: "ready", extra: "sentinel-secret" });
-  assert.equal(harness.importButton.disabled, true);
-  assert.equal(harness.status.textContent, "Importing session from Chrome. Please wait.");
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: first.requestId, outcome: "ready" });
-  assert.equal(harness.importButton.disabled, false);
-  assert.equal(harness.status.textContent, "Session imported. Usage will refresh shortly.");
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: "other", outcome: "saved" });
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: first.requestId, outcome: "saved", extra: "x" });
+  assert.equal(harness.saveButton.disabled, true);
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: first.requestId, outcome: "saved" });
+  assert.equal(harness.saveButton.disabled, false);
+  assert.equal(harness.status.textContent, "API key saved. Usage will refresh shortly.");
+  assert.equal(harness.apiKey.value, "", "the field is wiped after a successful save");
 
-  harness.clickImport();
-  const busy = harness.lastImportRequest();
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: busy.requestId, outcome: "busy" });
-  assert.equal(harness.status.textContent, "Another import is already in progress. Please wait and try again.");
-  harness.clickImport();
-  const failed = harness.lastImportRequest();
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: failed.requestId, outcome: "failed" });
-  assert.equal(harness.status.textContent, "Import could not be completed. Check Chrome, then try again.");
+  harness.apiKey.value = "sk-test-456";
+  harness.clickSave();
+  const failed = harness.lastRequest();
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: failed.requestId, outcome: "failed" });
+  assert.equal(harness.status.textContent, "The key could not be saved. Try again.");
+  harness.clickSave();
+  const rejected = harness.lastRequest();
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: rejected.requestId, outcome: "invalid" });
+  assert.equal(harness.status.textContent, "That does not look like a valid API key.");
 
-  harness.clickImport();
-  const timedOut = harness.lastImportRequest();
+  harness.clickClear();
+  const clear = harness.lastRequest();
+  assert.deepEqual(Object.keys(clear).sort(), ["kind", "requestId"]);
+  assert.equal(clear.kind, "nan.clearApiKey.v1");
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: clear.requestId, outcome: "cleared" });
+  assert.equal(harness.status.textContent, "API key removed.");
+
+  harness.apiKey.value = "sk-test-789";
+  harness.clickSave();
+  const timedOut = harness.lastRequest();
   harness.runLatestTimer();
-  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.saveButton.disabled, false);
   assert.equal(harness.status.textContent, "Still waiting for the plugin. You can retry when ready.");
-  harness.socket.message({ kind: "nan.importChromeSession.result.v1", requestId: timedOut.requestId, outcome: "ready" });
+  harness.socket.message({ kind: "nan.apiKey.result.v1", requestId: timedOut.requestId, outcome: "saved" });
   assert.equal(harness.status.textContent, "Still waiting for the plugin. You can retry when ready.", "late responses are stale");
 
-  harness.clickImport();
+  harness.clickSave();
   harness.socket.readyState = 3;
   harness.socket.emit("close");
-  assert.equal(harness.importButton.disabled, false);
+  assert.equal(harness.saveButton.disabled, false);
   assert.equal(harness.status.textContent, "Connection closed. Reopen this action to try again.");
-  harness.clickImport();
+  harness.clickSave();
   assert.equal(harness.status.textContent, "Unable to contact the plugin. Reopen this action and try again.");
 });
 
@@ -153,15 +170,17 @@ test("NaN Dashboard launcher inspector is settings-free and cannot request model
 function createInspectorHarness(): {
   connect(action: string): void;
   socket: FakeWebSocket;
-  importButton: FakeElement;
+  apiKey: FakeElement;
+  saveButton: FakeElement;
   status: FakeElement;
-  clickImport(): void;
-  importRequests(): Array<{ kind: string; requestId: string }>;
-  lastImportRequest(): { kind: string; requestId: string };
+  clickSave(): void;
+  clickClear(): void;
+  requests(): Array<Record<string, string>>;
+  lastRequest(): Record<string, string>;
   runLatestTimer(): void;
 } {
   const elements = new Map<string, FakeElement>();
-  for (const id of ["refreshSettings", "nanChromeImportSettings", "nanSettings", "nanModelUsageSettings", "autoRefresh", "refreshInterval", "nanModel", "nanKeyModel", "refreshNanModels", "importChromeSession", "importChromeSessionStatus"]) {
+  for (const id of ["refreshSettings", "nanApiKeySettings", "nanSettings", "nanModelUsageSettings", "autoRefresh", "refreshInterval", "nanModel", "nanKeyModel", "refreshNanModels", "nanApiKey", "saveApiKey", "clearApiKey", "apiKeyStatus"]) {
     elements.set(`#${id}`, new FakeElement());
   }
   const timers: Array<() => void> = [];
@@ -178,19 +197,21 @@ function createInspectorHarness(): {
   const script = inspector.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script, "property inspector script exists");
   new Script(script).runInContext(context);
-  const requests = (): Array<{ kind: string; requestId: string }> => FakeWebSocket.instances.at(-1)!.sent
+  const requests = (): Array<Record<string, string>> => FakeWebSocket.instances.at(-1)!.sent
     .filter((message) => message.event === "sendToPlugin")
-    .map((message) => message.payload);
+    .map((message) => message.payload as Record<string, string>);
   return {
     connect(action: string): void {
       (context as unknown as { connectElgatoStreamDeckSocket: Function }).connectElgatoStreamDeckSocket(1234, "context", "registerPropertyInspector", "{}", JSON.stringify({ action, payload: { settings: {} } }));
     },
     get socket(): FakeWebSocket { return FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!; },
-    importButton: elements.get("#importChromeSession")!,
-    status: elements.get("#importChromeSessionStatus")!,
-    clickImport(): void { elements.get("#importChromeSession")!.emit("click"); },
-    importRequests: requests,
-    lastImportRequest(): { kind: string; requestId: string } { return requests().at(-1)!; },
+    apiKey: elements.get("#nanApiKey")!,
+    saveButton: elements.get("#saveApiKey")!,
+    status: elements.get("#apiKeyStatus")!,
+    clickSave(): void { elements.get("#saveApiKey")!.emit("click"); },
+    clickClear(): void { elements.get("#clearApiKey")!.emit("click"); },
+    requests,
+    lastRequest: () => requests().at(-1)!,
     runLatestTimer(): void { timers.at(-1)!(); },
   };
 }
