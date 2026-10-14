@@ -10140,7 +10140,10 @@ function monthlyDetail(state, model, now) {
     // Stale usage against a live clock would skew the rate, so only fresh data is projected.
     const pace = state.stale || !state.quota ? null
         : projectMonthlyPace({ used: model.tokensUsed, cap: model.cap, periodStart: state.quota.periodStart ?? null, periodEnd: model.resetAt, now });
-    if (pace)
+    // The displayed API percentage is the source of truth for "cap reached", so the text never contradicts it.
+    if (!state.stale && model.percentage >= 100)
+        return "CAP REACHED";
+    if (pace && pace.kind !== "capped")
         return formatPace(pace);
     return model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL";
 }
