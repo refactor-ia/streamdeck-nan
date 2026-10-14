@@ -265,3 +265,77 @@ test("every style renders a full square canvas with no NaN for boundary percenta
     }
   }
 });
+
+// --- Regressions: live quota shape, label source, per-row thresholds, rolling presence ---
+import { parseNanQuota } from "../src/providers/nan/nan-api-quota-provider.ts";
+
+const liveBody = {
+  periodStart: "2026-10-01",
+  periodEnd: "2026-11-01T00:00:00Z",
+  models: [{ model: "glm5.2", tokensUsed: 125_000_000, cap: 1_000_000_000, fullCap: 1_000_000_000, windowHours: 4, fullWindowTokens: 400_000_000, periodEnd: "2026-11-01T00:00:00Z" }],
+};
+const rowLabels = (svg: string): string[] => [...svg.matchAll(/>(\d+H|WEEK|MONTH)</g)].map((match) => match[1] as string);
+
+test("live quota shape (windowHours without rolling usage) renders a single MONTH row and no 4H in any style", () => {
+  const parsed = parseNanQuota(liveBody);
+  assert.equal(parsed.periodStart, "2026-10-01");
+  const state = usage({ quota: parsed });
+  const view = buildNanModelKeyView(state, { model: "glm5.2" }, NOW);
+  assert.deepEqual(view.rows.map((row) => row.label), ["MONTH"]);
+  for (const style of STYLES) {
+    const svg = svgFor(state, style, "glm5.2");
+    // Only the dual style draws row labels; it must draw exactly the MONTH row.
+    assert.deepEqual(rowLabels(svg), style === "dual" ? ["MONTH"] : [], style);
+    assert.doesNotMatch(svg, /4H/);
+  }
+});
+
+test("rolling label follows the rolling window, not the model windowHours", () => {
+  const state = rollingState(5, { rolling: { ...rolling, windowHours: 4 } });
+  assert.equal(buildNanModelKeyView(state, { model: "qwen3.8-flash" }, NOW).rows[0]?.label, "4H");
+});
+
+test("dual rows are colored by their own percentage in both orders", () => {
+  const dual = (rollingPct: number, billingPct: number) =>
+    svgFor(usage({ quota: { ...quota, models: [{ ...capped, percentage: billingPct, windowHours: 4, rolling: { ...rolling, percentage: rollingPct } }] } }), "dual");
+  const rowFill = (svg: string, y: number) => svg.match(new RegExp(`<rect x="12" y="${y}" width="[\\d.]+" height="8" rx="4" fill="(#[0-9a-f]+)"`, "g"))?.map((rect) => rect.match(/fill="(#[0-9a-f]+)"/)?.[1]).find((fill) => fill !== "#2c2144");
+  const lowRolling = dual(10, 95);
+  const highRolling = dual(95, 10);
+  assert.match(lowRolling, new RegExp(CRITICAL));
+  assert.match(highRolling, new RegExp(CRITICAL));
+  const fills = (svg: string) => [...svg.matchAll(/<rect x="12" y="(\d+)" width="[\d.]+" height="8" rx="4" fill="(#[0-9a-f]+)"/g)].filter((match) => match[2] !== "#2c2144").map((match) => ({ y: Number(match[1]), color: match[2] }));
+  const low = fills(lowRolling);
+  const high = fills(highRolling);
+  assert.equal(low.length, 2);
+  assert.equal(high.length, 2);
+  // The first (top) row is rolling, the second is billing.
+  assert.deepEqual([low[0]?.color, low[1]?.color], [BRAND, CRITICAL]);
+  assert.deepEqual([high[0]?.color, high[1]?.color], [CRITICAL, BRAND]);
+  assert.equal(rowFill(lowRolling, 70), low[0]?.color);
+});
+
+test("ring and bar color follows the rolling row, not the billing row", () => {
+  const state = (rollingPct: number, billingPct: number) =>
+    usage({ quota: { ...quota, models: [{ ...capped, percentage: billingPct, windowHours: 4, rolling: { ...rolling, percentage: rollingPct } }] } });
+  for (const style of ["ring", "bar"] as const) {
+    assert.equal(gauge(svgFor(state(10, 95), style), style).color, BRAND, `${style} rolling 10`);
+    assert.equal(gauge(svgFor(state(95, 10), style), style).color, CRITICAL, `${style} rolling 95`);
+  }
+});
+
+test("rolling row thresholds switch at 75 and 90", () => {
+  for (const style of STYLES) {
+    for (const [percent, color] of [[74.99, BRAND], [75, WARN], [89.99, WARN], [90, CRITICAL]] as const) {
+      const state = usage({ quota: { ...quota, models: [{ ...capped, percentage: 1, windowHours: 4, rolling: { ...rolling, percentage: percent } }] } });
+      assert.equal(gauge(svgFor(state, style), style).color, color, `${style} rolling ${percent}`);
+    }
+  }
+});
+
+test("parser: windowTokensUsed 0 yields a 0% rolling row, null is treated as absent", () => {
+  const parse = (windowTokensUsed: number | null) => parseNanQuota({ models: [{ ...liveBody.models[0], windowTokensUsed }] });
+  const zero = buildNanModelKeyView(usage({ quota: parse(0) }), { model: "glm5.2" }, NOW);
+  assert.deepEqual(zero.rows.map((row) => [row.label, row.percent]), [["4H", 0], ["MONTH", 12.5]]);
+  const absent = buildNanModelKeyView(usage({ quota: parse(null) }), { model: "glm5.2" }, NOW);
+  assert.deepEqual(absent.rows.map((row) => row.label), ["MONTH"]);
+});
