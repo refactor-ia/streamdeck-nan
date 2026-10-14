@@ -36,6 +36,8 @@ export interface NanUncappedModelQuota {
 
 export interface NanQuota {
   readonly eligibility: "unknown";
+  /** Billing period start (YYYY-MM-DD) as reported by the endpoint, or null when absent. */
+  readonly periodStart: string | null;
   readonly models: readonly NanModelQuota[];
   /** Raw data for cap=0 entries; no cap or percentage is inferred. */
   readonly uncappedModels: readonly NanUncappedModelQuota[];
@@ -110,7 +112,7 @@ export function parseNanQuota(value: unknown): NanQuota {
       ...(rolling ? { rolling } : {}),
     });
   }
-  return { eligibility: "unknown", models, uncappedModels };
+  return { eligibility: "unknown", periodStart: typeof value.periodStart === "string" ? value.periodStart : null, models, uncappedModels };
 }
 
 function parseRolling(entry: Record<string, unknown>, windowHours: number | null): NanRollingQuota | undefined {
