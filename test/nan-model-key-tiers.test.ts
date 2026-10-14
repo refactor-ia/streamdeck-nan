@@ -102,12 +102,46 @@ test("reset follows the provider: unknown reset shows none, elapsed reset shows 
   assert.doesNotMatch(svgFor(usage({ quota: { ...quota, models: [{ ...capped, resetAt: null }] } }), "ring"), /RESET|NaN/);
 });
 
-test("capped row label reflects the rolling window length", () => {
-  const label = (windowHours: number | null) =>
-    buildNanModelKeyView(usage({ quota: { ...quota, models: [{ ...capped, windowHours }] } }), { model: "qwen3.8-flash" }, NOW).rows[0]?.label;
+const rolling = { tokensUsed: 62, budget: 100, percentage: 62, resetAt: "2026-10-01T02:00:00Z", windowHours: 4 };
+const rollingState = (windowHours: number | null, extra: Record<string, unknown> = { rolling }) =>
+  usage({ quota: { ...quota, models: [{ ...capped, windowHours, ...extra }] } });
+
+test("rolling row label reflects the rolling window length", () => {
+  const label = (hours: number) =>
+    buildNanModelKeyView(rollingState(hours, { rolling: { ...rolling, windowHours: hours } }), { model: "qwen3.8-flash" }, NOW).rows[0]?.label;
   assert.equal(label(4), "4H");
   assert.equal(label(168), "WEEK");
-  assert.equal(label(null), "MONTH");
+});
+
+test("a model with rolling data shows the rolling window first and the billing period as MONTH", () => {
+  const view = buildNanModelKeyView(rollingState(4), { model: "qwen3.8-flash" }, NOW);
+  assert.deepEqual(view.rows, [
+    { label: "4H", percent: 62, reset: "2H 0M" },
+    { label: "MONTH", percent: 50, reset: "5H 30M" },
+  ]);
+});
+
+test("rolling and billing rows are judged on their own percentage", () => {
+  const state = usage({ quota: { ...quota, models: [{ ...capped, percentage: 10, windowHours: 4, rolling: { ...rolling, percentage: 95 } }] } });
+  const dual = decode(renderNanModelKeyImage(state, { model: "qwen3.8-flash", keyStyle: "dual" }, NOW));
+  assert.match(dual, />4H</);
+  assert.match(dual, />MONTH</);
+  assert.match(dual, />95%</);
+  assert.match(dual, />10%</);
+  assert.match(dual, new RegExp(CRITICAL));
+  for (const style of ["ring", "bar"] as const) {
+    const svg = svgFor(state, style);
+    assert.match(svg, />95%</);
+    assert.doesNotMatch(svg, />10%</);
+  }
+});
+
+test("a windowed model without rolling data falls back to the MONTH billing period, never 4H", () => {
+  for (const hours of [4, 168, null]) {
+    const view = buildNanModelKeyView(rollingState(hours, {}), { model: "qwen3.8-flash" }, NOW);
+    assert.deepEqual(view.rows, [{ label: "MONTH", percent: 50, reset: "5H 30M" }]);
+    for (const style of STYLES) assert.doesNotMatch(svgFor(rollingState(hours, {}), style), />4H</);
+  }
 });
 
 test("uncapped model shows its compact token value and NO CAP without any percentage", () => {
