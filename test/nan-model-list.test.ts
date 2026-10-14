@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { listNanModels, cycleNanLiveModel, isSelectableNanLiveModel, resolveNanLiveModel } from "../src/actions/nan-live-model.ts";
 import { renderNanDashboardFeedback } from "../src/actions/usage-feedback.ts";
-import { renderNanModelUsageSvg } from "../src/actions/nan-model-feedback.ts";
+import { renderNanModelKeyImage } from "../src/actions/nan-model-key-view.ts";
 import { parseNanQuota } from "../src/providers/nan/nan-api-quota-provider.ts";
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
 
@@ -64,10 +64,10 @@ test("rotation cycles exactly the rendered list in both directions and wraps", (
 });
 
 test("key renders uncapped month usage and unused models with NO CAP", () => {
-  const month = decodeURIComponent(renderNanModelUsageSvg(state, { model: "gemma4" }));
-  assert.match(month, /NO CAP/);
-  const none = renderNanModelUsageSvg(state, { model: "flux-2-klein" });
+  const svg = (model: string) => decodeURIComponent(renderNanModelKeyImage(state, { model }));
+  assert.match(svg("gemma4"), /NO CAP/);
+  const none = svg("flux-2-klein");
   assert.match(none, /NO CAP/);
-  assert.doesNotMatch(none, /NOT RETURNED/);
-  assert.match(renderNanModelUsageSvg(state, { model: "not-in-list" }), /NOT RETURNED/);
+  assert.doesNotMatch(none, /NO DATA/);
+  assert.match(svg("not-in-list"), /NO DATA/);
 });

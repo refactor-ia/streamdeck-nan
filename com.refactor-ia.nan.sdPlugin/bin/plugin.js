@@ -12686,16 +12686,44 @@ let NanDemoUsage = (() => {
     return _classThis;
 })();
 
-/** Shared NaN brand theme for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
+/** Single source of truth for refactoria.dev brand colors and usage thresholds. Keep layouts/*.json and ui/property-inspector.html in sync (enforced by test/branding-tokens.test.ts). */
+const BRAND = {
+    bg: "#0b0714",
+    track: "#2c2144",
+    brand: "#7127ff",
+    text: "#ffffff",
+    muted: "#c9c1de",
+    subtle: "#9a8fb8",
+    warn: "#ffb547",
+    critical: "#ff5470",
+    stale: "#6b5f8a",
+};
+/** Usage percentage at which a level turns warn (inclusive). */
+const WARN_AT = 75;
+/** Usage percentage at which a level turns critical (inclusive). */
+const CRITICAL_AT = 90;
+function levelColor(percent, stale = false) {
+    if (stale)
+        return BRAND.stale;
+    if (percent >= CRITICAL_AT)
+        return BRAND.critical;
+    if (percent >= WARN_AT)
+        return BRAND.warn;
+    return BRAND.brand;
+}
+
+/** Shared brand theme (derived from branding/tokens) for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
 const THEME = {
-    bg: "#0e0c14",
-    fg: "#f3f1f8",
-    track: "#231f30",
-    violet: "#7d39eb",
-    violetSoft: "#b48cff",
-    ok: "#7ed49c",
-    warn: "#ffc247",
-    danger: "#ff5c6c"};
+    bg: BRAND.bg,
+    fg: BRAND.text,
+    track: BRAND.track,
+    violet: BRAND.brand,
+    violetSoft: BRAND.muted,
+    ok: BRAND.brand,
+    warn: BRAND.warn,
+    danger: BRAND.critical,
+    stale: BRAND.stale,
+};
 const KEY_FONT = "'Helvetica Neue',Helvetica,Arial,sans-serif";
 /** Renders one bold SVG text run; an empty value renders nothing. */
 function text(value, x, y, fill, size, options = {}) {
@@ -12722,20 +12750,6 @@ function escapeXml(value) {
 }
 
 const DEFAULT_KEY_STYLE = "ring";
-/** refactoria.dev brand tokens for 144x144 key artwork. */
-const KEY_BRAND = {
-    bg: "#0b0714",
-    track: "#2c2144",
-    brand: "#7127ff",
-    text: "#ffffff",
-    muted: "#c9c1de",
-    subtle: "#9a8fb8",
-    warn: "#ffb547",
-    critical: "#ff5470",
-    stale: "#6b5f8a",
-};
-const WARN_AT = 75;
-const CRITICAL_AT = 90;
 const SANS = "Inter,-apple-system,'Helvetica Neue',Arial,sans-serif";
 const MONO = "'JetBrains Mono','SF Mono',Menlo,monospace";
 const SIZE = 144;
@@ -12755,15 +12769,6 @@ function modelAlias(model) {
         return known;
     const upper = model.toUpperCase();
     return upper.length > 11 ? `${upper.slice(0, 10)}…` : upper;
-}
-function levelColor(percent, stale = false) {
-    if (stale)
-        return KEY_BRAND.stale;
-    if (percent >= CRITICAL_AT)
-        return KEY_BRAND.critical;
-    if (percent >= WARN_AT)
-        return KEY_BRAND.warn;
-    return KEY_BRAND.brand;
 }
 function formatReset(resetAt, now) {
     if (!resetAt)
@@ -12794,7 +12799,7 @@ function renderKeyImage(view, style) {
 function renderKeySvg(view, style) {
     const body = view.error || view.rows.length === 0 ? errorBody(view) : style === "bar" ? barBody(view) : style === "dual" ? dualBody(view) : ringBody(view);
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" role="img" aria-label="${escapeXml(`${view.label} usage`)}">`
-        + `<rect width="${SIZE}" height="${SIZE}" rx="14" fill="${KEY_BRAND.bg}"/>${body}</svg>`;
+        + `<rect width="${SIZE}" height="${SIZE}" rx="14" fill="${BRAND.bg}"/>${body}</svg>`;
 }
 function t(value, x, y, fill, options = {}) {
     if (!value)
@@ -12812,18 +12817,18 @@ function primaryText(view) {
 }
 function accent(view, row) {
     if (view.stale || !hasPercent(row))
-        return KEY_BRAND.stale;
+        return BRAND.stale;
     return levelColor(row.percent);
 }
 /** The STALE marker replaces the reset countdown when the data is stale. */
 function footerText(view, reset) {
-    return view.stale ? { text: "STALE", color: KEY_BRAND.warn } : { text: reset ?? "", color: KEY_BRAND.subtle };
+    return view.stale ? { text: "STALE", color: BRAND.warn } : { text: reset ?? "", color: BRAND.subtle };
 }
 function errorBody(view) {
     const status = view.status ?? "NO DATA";
-    const color = view.error ? KEY_BRAND.critical : KEY_BRAND.warn;
-    return t(label(view), 72, 26, KEY_BRAND.subtle, { anchor: "middle" })
-        + t("--", 72, 84, KEY_BRAND.stale, { anchor: "middle", mono: true, size: 40 })
+    const color = view.error ? BRAND.critical : BRAND.warn;
+    return t(label(view), 72, 26, BRAND.subtle, { anchor: "middle" })
+        + t("--", 72, 84, BRAND.stale, { anchor: "middle", mono: true, size: 40 })
         + t(status, 72, 116, color, { anchor: "middle" });
 }
 function ringBody(view) {
@@ -12834,7 +12839,7 @@ function ringBody(view) {
     const cx = 72, cy = 82;
     const color = accent(view, row);
     const dashed = percent ? "" : ' stroke-linecap="round" stroke-dasharray="4 8"';
-    const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${KEY_BRAND.track}" stroke-width="10"${dashed}/>`;
+    const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${BRAND.track}" stroke-width="10"${dashed}/>`;
     let arc = "";
     if (hasPercent(row)) {
         const { circumference, filled } = ringDash(row.percent, radius);
@@ -12844,8 +12849,8 @@ function ringBody(view) {
     }
     const footer = footerText(view, row.reset);
     return `${track}${arc}`
-        + t(label(view), 72, 20, KEY_BRAND.subtle, { anchor: "middle" })
-        + t(shown, 72, 90, percent ? KEY_BRAND.text : KEY_BRAND.muted, { anchor: "middle", mono: true, size: shown.length > 4 ? 24 : 30 })
+        + t(label(view), 72, 20, BRAND.subtle, { anchor: "middle" })
+        + t(shown, 72, 90, percent ? BRAND.text : BRAND.muted, { anchor: "middle", mono: true, size: shown.length > 4 ? 24 : 30 })
         + t(footer.text, 72, 110, footer.color, { anchor: "middle", mono: true });
 }
 function barBody(view) {
@@ -12856,22 +12861,22 @@ function barBody(view) {
     const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
     const fill = width > 0 ? `<rect x="12" y="98" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "";
     const footer = footerText(view, row.reset);
-    return t(label(view), 12, 26, KEY_BRAND.subtle)
+    return t(label(view), 12, 26, BRAND.subtle)
         + `<circle cx="132" cy="21" r="5" fill="${color}"/>`
-        + t(shown, 12, 82, percent ? KEY_BRAND.text : KEY_BRAND.muted, { mono: true, size: shown.length > 4 ? 36 : 44 })
-        + `<rect x="12" y="98" width="120" height="8" rx="4" fill="${KEY_BRAND.track}"/>${fill}`
+        + t(shown, 12, 82, percent ? BRAND.text : BRAND.muted, { mono: true, size: shown.length > 4 ? 36 : 44 })
+        + `<rect x="12" y="98" width="120" height="8" rx="4" fill="${BRAND.track}"/>${fill}`
         + t(footer.text, 12, 130, footer.color, { mono: true });
 }
 function dualBody(view) {
     const rows = view.rows.slice(0, 2);
-    const parts = [t(label(view), 12, 26, KEY_BRAND.subtle)];
+    const parts = [t(label(view), 12, 26, BRAND.subtle)];
     rows.forEach((row, index) => {
         const percent = hasPercent(row);
         const top = 62 + index * 40;
         const color = accent(view, row);
         const shown = hasPercent(row) ? pct(row.percent) : index === 0 && view.value ? view.value : "--";
         const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
-        parts.push(t(row.label.toUpperCase(), 12, top, KEY_BRAND.muted), t(shown, 132, top, percent ? KEY_BRAND.text : KEY_BRAND.muted, { anchor: "end", mono: true, size: 16 }), `<rect x="12" y="${top + 8}" width="120" height="8" rx="4" fill="${KEY_BRAND.track}"/>`, width > 0 ? `<rect x="12" y="${top + 8}" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "");
+        parts.push(t(row.label.toUpperCase(), 12, top, BRAND.muted), t(shown, 132, top, percent ? BRAND.text : BRAND.muted, { anchor: "end", mono: true, size: 16 }), `<rect x="12" y="${top + 8}" width="120" height="8" rx="4" fill="${BRAND.track}"/>`, width > 0 ? `<rect x="12" y="${top + 8}" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "");
     });
     const footer = footerText(view, rows.length === 1 ? rows[0].reset : undefined);
     parts.push(t(footer.text, 12, 134, footer.color, { mono: true }));
@@ -13068,7 +13073,7 @@ function renderNanMetricsUsageSvg(state, period) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN ${display.title.toLowerCase()} tokens">
 <rect width="72" height="72" rx="6" fill="${THEME.bg}"/>${chipHeader(display.title, THEME.fg)}
 ${text(display.value, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.unit, 6, 46, THEME.fg, 5.5)}${text(display.period, 6, 52, THEME.fg, 5.5, { opacity: 0.6 })}
-${gaugeFooter(0, display.accent, display.status, display.accent, THEME.track)}</svg>`;
+${gaugeFooter(0, display.accent, display.status, display.statusColor, THEME.track)}</svg>`;
 }
 function metricsDisplay(state, period) {
     const title = period === "allTime" ? "TOTAL" : "MONTHLY";
@@ -13076,10 +13081,10 @@ function metricsDisplay(state, period) {
     const window = state.metrics?.[period];
     if (!window) {
         const status = state.metricsError ? "METRICS ERROR" : "NO DATA";
-        return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
+        return { title, value: "--", unit: "DASHBOARD METRICS", period: label, status, accent: status === "METRICS ERROR" ? THEME.danger : THEME.warn, statusColor: status === "METRICS ERROR" ? THEME.danger : THEME.warn };
     }
     const stale = state.stale || state.metricsStale === true;
-    return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.warn : THEME.violetSoft };
+    return { title, value: compact(window.totalTokens), unit: "TOKENS", period: label, status: stale ? "STALE" : "", accent: stale ? THEME.stale : THEME.violetSoft, statusColor: THEME.warn };
 }
 function compact(value) {
     return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);

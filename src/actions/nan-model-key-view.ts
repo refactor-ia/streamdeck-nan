@@ -19,14 +19,14 @@ export function buildNanModelKeyView(state: NanDashboardUsage, settings: NanMode
   if (uncapped) {
     return {
       label: modelAlias(selected),
-      rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) }],
+      rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
       value: compact(uncapped.tokensUsed),
       stale: state.stale,
     };
   }
   const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
   if (monthly) {
-    return { label: modelAlias(selected), rows: [{ label: "MONTH" }], value: compact(monthly.totalTokens), stale: state.metricsStale === true || state.stale };
+    return { label: modelAlias(selected), rows: [{ label: "MONTH", reset: NO_CAP }], value: compact(monthly.totalTokens), stale: state.metricsStale === true || state.stale };
   }
   if (!state.quota && !state.metrics) {
     const status = state.error === "needs-key" || state.error === "key-rejected" ? "API KEY"
@@ -35,7 +35,7 @@ export function buildNanModelKeyView(state: NanDashboardUsage, settings: NanMode
   }
   if (state.catalog?.includes(selected)) {
     // Catalog model without quota or usage rows: NO CAP, month-to-date tokens (0 once metrics loaded).
-    return { label: modelAlias(selected), rows: [{ label: "MONTH" }], value: state.metrics ? "0" : "--", stale: state.metricsStale === true || state.stale };
+    return { label: modelAlias(selected), rows: [{ label: "MONTH", reset: NO_CAP }], value: state.metrics ? "0" : "--", stale: state.metricsStale === true || state.stale };
   }
   return { label: modelAlias(selected), rows: [], status: "NO DATA" };
 }
@@ -43,6 +43,8 @@ export function buildNanModelKeyView(state: NanDashboardUsage, settings: NanMode
 export function renderNanModelKeyImage(state: NanDashboardUsage, settings: NanModelKeySettings, now: number = Date.now()): string {
   return renderKeyImage(buildNanModelKeyView(state, settings, now), normalizeKeyStyle(settings.keyStyle));
 }
+
+const NO_CAP = "NO CAP";
 
 /** Provider windows without hours are monthly; 168h is the weekly window. */
 function windowLabel(hours: number | null): string {

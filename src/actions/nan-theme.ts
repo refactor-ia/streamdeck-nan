@@ -1,16 +1,17 @@
-/** Shared NaN brand theme for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
+import { BRAND } from "../branding/tokens.js";
+
+/** Shared brand theme (derived from branding/tokens) for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
 export const THEME = {
-  bg: "#0e0c14",
-  fg: "#f3f1f8",
-  muted: "#9a93ab",
-  track: "#231f30",
-  violet: "#7d39eb",
-  violetSoft: "#b48cff",
-  ok: "#7ed49c",
-  warn: "#ffc247",
-  danger: "#ff5c6c",
-  dangerBg: "#7a0f1c",
-  dangerTrack: "rgba(0,0,0,0.25)",
+  bg: BRAND.bg,
+  fg: BRAND.text,
+  muted: BRAND.subtle,
+  track: BRAND.track,
+  violet: BRAND.brand,
+  violetSoft: BRAND.muted,
+  ok: BRAND.brand,
+  warn: BRAND.warn,
+  danger: BRAND.critical,
+  stale: BRAND.stale,
 } as const;
 
 export const KEY_FONT = "'Helvetica Neue',Helvetica,Arial,sans-serif";
