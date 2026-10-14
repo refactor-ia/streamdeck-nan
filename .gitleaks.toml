@@ -1,2 +1,7 @@
 [extend]
 useDefault = true
+
+# Property Inspector message kind identifiers, not secrets.
+[allowlist]
+description = "NaN API key message kinds"
+regexes = ['''^nan\.(saveApiKey|clearApiKey|apiKey\.result)\.v1$''']
