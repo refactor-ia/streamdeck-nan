@@ -113,12 +113,12 @@ test("warning styling does not affect stale normal, uncapped, metrics-only, unse
   const uncapped = renderNanModelUsageSvg(ready, { model: "uncapped-qwen" });
   const unselected = renderNanModelUsageSvg(ready, {});
   const metrics = {
-    last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] },
+    
     monthToDate: { totalTokens: 15, byModel: [{ model: "metrics-only", inputTokens: 10, outputTokens: 5, totalTokens: 15 }] }, allTime: { totalTokens: 0, byModel: [] },
   };
   const metricsOnly = renderNanModelUsageSvg({ source: "dashboard", metrics, stale: false }, { model: "metrics-only" });
   const unavailable = renderNanModelUsageSvg({ source: "dashboard", stale: false }, { model: "qwen3.8-flash" });
-  const importing = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" });
+  const importing = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-key" }, { model: "qwen3.8-flash" });
   assert.match(staleNormal, /<text x="66" y="65" fill="#ffc247"[^>]*>STALE<\/text>/);
   for (const svg of [staleNormal, uncapped, unselected, metricsOnly, unavailable, importing]) {
     assert.equal(renderedBackground(svg), BG);
@@ -128,7 +128,7 @@ test("warning styling does not affect stale normal, uncapped, metrics-only, unse
   assert.match(metricsOnly, /MONTH TOKENS/);
   assert.match(unselected, /CHOOSE MODEL/);
   assert.match(unavailable, /NO DATA/);
-  assert.match(importing, /IMPORT/);
+  assert.match(importing, /API KEY/);
 });
 
 test("model key gives over-cap consumption its own readable percentage, raw bands, and reset date", () => {
@@ -163,15 +163,15 @@ test("model key distinguishes unconfigured, missing, uncapped, stale, and import
   assert.match(uncapped, /4H WINDOW/);
   assert.doesNotMatch(uncapped, /%/);
   assert.match(renderNanModelUsageSvg({ ...ready, stale: true }, { model: "qwen3.8-flash" }), /STALE/);
-  const importState = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-import" }, { model: "qwen3.8-flash" });
-  assert.match(importState, /IMPORT/);
+  const importState = renderNanModelUsageSvg({ source: "dashboard", stale: false, error: "needs-key" }, { model: "qwen3.8-flash" });
+  assert.match(importState, /API KEY/);
   assert.match(importState, /USE INSPECTOR/);
   assert.doesNotMatch(importState, /USE NaN DIAL/);
 });
 
 test("metrics-only keys render month-to-date totals without an invented cap or percentage", () => {
   const metrics = {
-    last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] },
+    
     monthToDate: { totalTokens: 15, byModel: [
       { model: "qwen3.6", inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       { model: "gemma4", inputTokens: 0, outputTokens: 0, totalTokens: 0 },

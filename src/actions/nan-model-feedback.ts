@@ -39,7 +39,7 @@ export function renderNanModelUsageSvg(state: NanDashboardUsage, settings: NanMo
       : monthlyModel
         ? monthly(monthlyModel, state.metricsStale === true || state.stale)
         : !state.quota && !state.metrics
-          ? unavailable(state.error)
+          ? unavailable(state)
           : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
   const foreground = display.foreground ?? THEME.fg;
   const [firstLabel = "", secondLabel = ""] = display.label;
@@ -103,9 +103,11 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
   };
 }
 
-function unavailable(error: NanDashboardUsage["error"]): Display {
-  const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
-  const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
+function unavailable(state: NanDashboardUsage): Display {
+  const { error } = state;
+  const status = error === "needs-key" || error === "key-rejected" ? "API KEY"
+    : error === "keychain-unavailable" || state.metricsError !== undefined ? "ERROR" : "NO DATA";
+  const secondary = status === "API KEY" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
   const accent = status === "ERROR" ? THEME.danger : THEME.warn;
   return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
 }

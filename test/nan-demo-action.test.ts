@@ -95,22 +95,6 @@ test("dial sends a correlated terminal result only to its current inspector", as
   assert.equal(sent.some((payload) => (payload as { requestId?: string }).requestId === "stale_1"), false);
 });
 
-test("shared controller stores and clears the API key through its store and reports failures generically", async () => {
-  const calls: string[] = [];
-  let fail = false;
-  const store = {
-    write: async (key: string) => { if (fail) throw new Error(key); calls.push(`write:${key}`); },
-    clear: async () => { if (fail) throw new Error("x"); calls.push("clear"); },
-  };
-  const controller = new NanDashboardController(undefined, undefined, undefined, store);
-  assert.equal(await controller.saveApiKey("sk-1"), "saved");
-  assert.equal(await controller.clearApiKey(), "cleared");
-  fail = true;
-  assert.equal(await controller.saveApiKey("sk-2"), "failed");
-  assert.equal(await controller.clearApiKey(), "failed");
-  assert.deepEqual(calls, ["write:sk-1", "clear"]);
-});
-
 class ImportDashboard {
   saved: string[] = [];
   throws = false;

@@ -34,7 +34,7 @@ function loadActions(): Promise<{
 const cached: NanDashboardUsage = {
   source: "dashboard", stale: false,
   metrics: {
-    last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] },
+    
     monthToDate: { totalTokens: 2, byModel: [] }, allTime: { totalTokens: 3, byModel: [] },
   },
 };

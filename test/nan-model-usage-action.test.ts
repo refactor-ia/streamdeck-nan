@@ -24,7 +24,7 @@ function loadNanModelUsage(): Promise<{ NanModelUsage: new (dashboard: unknown) 
   return import(actionUrl.href) as Promise<{ NanModelUsage: new (dashboard: unknown) => NanModelUsage }>;
 }
 
-const emptyUsage: NanDashboardUsage = { source: "dashboard", stale: false, error: "needs-import" };
+const emptyUsage: NanDashboardUsage = { source: "dashboard", stale: false, error: "needs-key" };
 const quotaUsage: NanDashboardUsage = {
   source: "dashboard",
   stale: false,
@@ -37,7 +37,7 @@ const quotaUsage: NanDashboardUsage = {
     uncappedModels: [{ model: "uncapped-one", tokensUsed: 3, resetAt: null, windowHours: null }],
   },
   metrics: {
-    last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] },
+    
     monthToDate: { totalTokens: 17, byModel: [
       { model: "qwen3.6", inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       { model: "gemma4", inputTokens: 1, outputTokens: 1, totalTokens: 2 },

@@ -39,15 +39,14 @@ export interface NanDashboardFeedback {
   readonly value: string;
   readonly unit: string;
   readonly indicator: number;
-  readonly status: "" | "STALE" | "NO QUOTA" | "IMPORT SESSION" | "KEYCHAIN UNAVAILABLE"
-    | "SESSION RESET FAILED" | "QUOTA INVALID" | "DASHBOARD UNAVAILABLE" | "IMPORT UNAVAILABLE"
-    | "IMPORT BUSY" | "INVALID SOURCE" | "IMPORTING";
+  readonly status: "" | "STALE" | "NO QUOTA" | "ADD API KEY" | "KEY REJECTED" | "KEYCHAIN UNAVAILABLE"
+    | "DASHBOARD UNAVAILABLE" | "INVALID SOURCE";
 }
 
 export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: { model?: string }): NanDashboardFeedback {
   const base = { title: "NaN" as const, demo: "DASHBOARD" as const };
   if (!state.quota) {
-    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state.error) };
+    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
   }
   const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
   if (selected) {
@@ -69,21 +68,13 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
   return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
 }
 
-export function renderNanImportProgress(): NanDashboardFeedback {
-  return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "IMPORTING" };
-}
-
-function dashboardStatus(error: NanDashboardUsage["error"]): NanDashboardFeedback["status"] {
-  switch (error) {
-    case "needs-import": return "IMPORT SESSION";
+function dashboardStatus(state: NanDashboardUsage): NanDashboardFeedback["status"] {
+  switch (state.error) {
+    case "needs-key": return "ADD API KEY";
+    case "key-rejected": return "KEY REJECTED";
     case "keychain-unavailable": return "KEYCHAIN UNAVAILABLE";
-    case "eviction-failed": return "SESSION RESET FAILED";
-    case "schema-invalid": return "QUOTA INVALID";
-    case "transient": return "DASHBOARD UNAVAILABLE";
-    case "import-unavailable": return "IMPORT UNAVAILABLE";
-    case "import-busy": return "IMPORT BUSY";
     case "invalid-source": return "INVALID SOURCE";
-    default: return "NO QUOTA";
+    default: return state.metricsError === "transient" ? "DASHBOARD UNAVAILABLE" : "NO QUOTA";
   }
 }
 
