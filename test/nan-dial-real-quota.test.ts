@@ -68,6 +68,11 @@ test("dial says CAP REACHED when usage is at or over the cap", () => {
   assert.equal(dial(paceQuota(1200), octFirst + 10 * DAY).unit, "120% · CAP REACHED");
 });
 
+test("dial follows the API percentage when it disagrees with tokensUsed / cap", () => {
+  assert.equal(dial(paceQuota(1000, { percentage: 95 }), octFirst + 10 * DAY).unit, "95% · RESETS NOV 1");
+  assert.equal(dial(paceQuota(400, { percentage: 100 }), octFirst + 10 * DAY).unit, "100% · CAP REACHED");
+});
+
 test("dial keeps RESETS text when no projection is possible or data is stale", () => {
   assert.equal(dial(paceQuota(100), octFirst + 3_600_000).unit, "10% · RESETS NOV 1");
   assert.equal(dial(paceQuota(100), octFirst + 10 * DAY, true).unit, "10% · RESETS NOV 1");
