@@ -29,7 +29,7 @@ test("Grok feedback keeps EXPERIMENTAL visible for healthy, stale, and no-data s
     experimental: "EXPERIMENTAL",
     period: "RESETS AUG 1",
     value: "42%",
-    indicator: 41.6,
+    indicator: { value: 41.6, bar_fill_c: "#7127ff" },
     status: "",
   });
   assert.equal(stale.experimental, "EXPERIMENTAL");

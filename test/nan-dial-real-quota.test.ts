@@ -26,7 +26,7 @@ test("dial renders every model of a real quota payload with percentage and reset
     assert.equal(feedback.status, "");
     assert.match(feedback.value, /^\S+ \/ \S+$/);
     assert.match(feedback.unit, /^\d+(\.\d)?% · RESETS /);
-    assert.ok(feedback.indicator > 0 && feedback.indicator < 100);
+    assert.ok(feedback.indicator.value > 0 && feedback.indicator.value < 100);
   }
 
   const mimo = renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "mimo-v2.6-flash" });

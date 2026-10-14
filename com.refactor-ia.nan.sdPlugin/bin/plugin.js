@@ -9974,6 +9974,32 @@ class UsageProviderCoordinator {
     }
 }
 
+/** Single source of truth for refactoria.dev brand colors and usage thresholds. Keep layouts/*.json and ui/property-inspector.html in sync (enforced by test/branding-tokens.test.ts). */
+const BRAND = {
+    bg: "#0b0714",
+    track: "#2c2144",
+    brand: "#7127ff",
+    text: "#ffffff",
+    muted: "#c9c1de",
+    subtle: "#9a8fb8",
+    warn: "#ffb547",
+    critical: "#ff5470",
+    stale: "#6b5f8a",
+};
+/** Usage percentage at which a level turns warn (inclusive). */
+const WARN_AT = 75;
+/** Usage percentage at which a level turns critical (inclusive). */
+const CRITICAL_AT = 90;
+function levelColor(percent, stale = false) {
+    if (stale)
+        return BRAND.stale;
+    if (percent >= CRITICAL_AT)
+        return BRAND.critical;
+    if (percent >= WARN_AT)
+        return BRAND.warn;
+    return BRAND.brand;
+}
+
 const REMOVED_NAN_MODELS = new Set(["glm5.2", "flux-2-klein"]);
 function isSelectableNanLiveModel(model) {
     return typeof model === "string" && model.length > 0 && model.length <= 128
@@ -10027,7 +10053,7 @@ class NanSettingsWriteQueue {
 function renderNanDashboardFeedback(state, settings) {
     const base = { title: "NaN", demo: "DASHBOARD" };
     if (!state.quota) {
-        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state.error) };
+        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: dashboardStatus(state.error) };
     }
     const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
     if (selected) {
@@ -10040,17 +10066,17 @@ function renderNanDashboardFeedback(state, settings) {
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
             unit: `${formatPercentage(model.percentage)}% · ${period}`,
-            indicator: Math.min(100, Math.max(0, model.percentage)),
+            indicator: bar(model.percentage, state.stale),
             status: state.stale ? "STALE" : "",
         };
     }
     const uncapped = state.quota.uncappedModels[0];
     if (uncapped)
-        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
-    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
+        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: bar(undefined), status: state.stale ? "STALE" : "" };
+    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: "NO QUOTA" };
 }
 function renderNanImportProgress() {
-    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "IMPORTING" };
+    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: bar(undefined), status: "IMPORTING" };
 }
 function dashboardStatus(error) {
     switch (error) {
@@ -10091,13 +10117,13 @@ function renderClaudeFeedback(result, _showCountdown = false) {
             title: "Claude",
             status: "NO DATA",
             sessionValue: "--",
-            sessionBar: 0,
+            sessionBar: bar(undefined),
             weeklyValue: "--",
-            weeklyBar: 0,
+            weeklyBar: bar(undefined),
         };
     }
-    const session = usageDisplay(result.usage.windows.session?.usedPercent);
-    const weekly = usageDisplay(result.usage.windows.week?.usedPercent);
+    const session = usageDisplay(result.usage.windows.session?.usedPercent, result.stale);
+    const weekly = usageDisplay(result.usage.windows.week?.usedPercent, result.stale);
     return {
         title: "Claude",
         status: result.stale
@@ -10118,7 +10144,7 @@ function renderCodexFeedback(result, showCountdown = false) {
             title: "GPT / OPENAI",
             period: "WEEKLY",
             value: "--",
-            indicator: 0,
+            indicator: bar(undefined),
             status: "NO DATA",
         };
     }
@@ -10128,7 +10154,7 @@ function renderCodexFeedback(result, showCountdown = false) {
         title: "GPT / OPENAI",
         period: "WEEKLY",
         value: countdown ?? `${Math.round(weekly)}%`,
-        indicator: weekly,
+        indicator: bar(week.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
     };
 }
@@ -10140,7 +10166,7 @@ function renderGrokFeedback(result, showCountdown = false) {
             experimental: "EXPERIMENTAL",
             period: "BILLING PERIOD",
             value: "--",
-            indicator: 0,
+            indicator: bar(undefined),
             status: "NO DATA",
         };
     }
@@ -10151,15 +10177,20 @@ function renderGrokFeedback(result, showCountdown = false) {
         experimental: "EXPERIMENTAL",
         period: billing.resetsAt ? `RESETS ${formatResetDate(billing.resetsAt)}` : "BILLING PERIOD",
         value: countdown ?? `${Math.round(used)}%`,
-        indicator: used,
+        indicator: bar(billing.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
     };
 }
-function usageDisplay(value) {
+function usageDisplay(value, stale) {
     if (value === undefined)
-        return { value: "--", bar: 0 };
-    const clamped = Math.min(100, Math.max(0, value));
-    return { value: `${Math.round(clamped)}%`, bar: clamped };
+        return { value: "--", bar: bar(undefined) };
+    return { value: `${Math.round(Math.min(100, Math.max(0, value)))}%`, bar: bar(value, stale) };
+}
+/** Bar fill follows the shared level thresholds on the raw percentage; missing data or stale renders muted. */
+function bar(percent, stale = false) {
+    if (percent === undefined)
+        return { value: 0, bar_fill_c: levelColor(0, true) };
+    return { value: Math.min(100, Math.max(0, percent)), bar_fill_c: levelColor(percent, stale) };
 }
 function compactNumber(value) {
     return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -12685,32 +12716,6 @@ let NanDemoUsage = (() => {
     });
     return _classThis;
 })();
-
-/** Single source of truth for refactoria.dev brand colors and usage thresholds. Keep layouts/*.json and ui/property-inspector.html in sync (enforced by test/branding-tokens.test.ts). */
-const BRAND = {
-    bg: "#0b0714",
-    track: "#2c2144",
-    brand: "#7127ff",
-    text: "#ffffff",
-    muted: "#c9c1de",
-    subtle: "#9a8fb8",
-    warn: "#ffb547",
-    critical: "#ff5470",
-    stale: "#6b5f8a",
-};
-/** Usage percentage at which a level turns warn (inclusive). */
-const WARN_AT = 75;
-/** Usage percentage at which a level turns critical (inclusive). */
-const CRITICAL_AT = 90;
-function levelColor(percent, stale = false) {
-    if (stale)
-        return BRAND.stale;
-    if (percent >= CRITICAL_AT)
-        return BRAND.critical;
-    if (percent >= WARN_AT)
-        return BRAND.warn;
-    return BRAND.brand;
-}
 
 /** Shared brand theme (derived from branding/tokens) for generated keypad artwork. Keep in sync with layouts/*.json and ui/property-inspector.html. */
 const THEME = {

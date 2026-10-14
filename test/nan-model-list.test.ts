@@ -39,7 +39,7 @@ test("dial renders capped, month-only and unused models", () => {
   const capped = renderNanDashboardFeedback(state, { model: "glm5.3" });
   assert.match(capped.unit, /^14\.4% · RESETS NOV 5/);
   const month = renderNanDashboardFeedback(state, { model: "gemma4" });
-  assert.deepEqual([month.model, month.value, month.indicator], ["gemma4", "5", 0]);
+  assert.deepEqual([month.model, month.value, month.indicator.value], ["gemma4", "5", 0]);
   assert.match(month.unit, /NO CAP/);
   const none = renderNanDashboardFeedback(state, { model: "flux-2-klein" });
   assert.deepEqual([none.model, none.value, none.status], ["flux-2-klein", "0", ""]);

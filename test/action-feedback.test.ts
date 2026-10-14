@@ -52,9 +52,9 @@ test("NaN dashboard feedback preserves raw quota values and distinguishes safe e
     model: "capped", tokensUsed: 120, cap: 100, percentage: 120, resetAt: null, windowHours: 4,
   }], uncappedModels: [{ model: "uncapped", tokensUsed: 42, resetAt: null, windowHours: null }] };
   assert.deepEqual(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, {}), {
-    title: "NaN", demo: "DASHBOARD", model: "capped", value: "120 / 100", unit: "120% · ROLLING 4H", indicator: 100, status: "",
+    title: "NaN", demo: "DASHBOARD", model: "capped", value: "120 / 100", unit: "120% · ROLLING 4H", indicator: { value: 100, bar_fill_c: "#ff5470" }, status: "",
   });
-  assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [{ ...quota.models[0], percentage: -5 }] }, stale: false }, {}).indicator, 0);
+  assert.deepEqual(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [{ ...quota.models[0], percentage: -5 }] }, stale: false }, {}).indicator, { value: 0, bar_fill_c: "#7127ff" });
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: true }, {}).status, "STALE");
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", stale: false, error: "needs-key" }, {}).status, "ADD API KEY");
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [], uncappedModels: [] }, stale: false }, {}).status, "NO QUOTA");
@@ -73,15 +73,15 @@ test("action-feedback preserves values, rounding, and bounds", () => {
     title: "Claude",
     status: "",
     sessionValue: "0%",
-    sessionBar: 0,
+    sessionBar: { value: 0, bar_fill_c: "#7127ff" },
     weeklyValue: "100%",
-    weeklyBar: 100,
+    weeklyBar: { value: 100, bar_fill_c: "#ff5470" },
   });
   assert.deepEqual(renderCodexFeedback(result), {
     title: "GPT / OPENAI",
     period: "WEEKLY",
     value: "100%",
-    indicator: 100,
+    indicator: { value: 100, bar_fill_c: "#ff5470" },
     status: "",
   });
 });
@@ -91,9 +91,9 @@ test("action-feedback renders available partial windows without inventing values
     title: "Claude",
     status: "NO DATA",
     sessionValue: "--",
-    sessionBar: 0,
+    sessionBar: { value: 0, bar_fill_c: "#6b5f8a" },
     weeklyValue: "42%",
-    weeklyBar: 42.4,
+    weeklyBar: { value: 42.4, bar_fill_c: "#7127ff" },
   });
   assert.equal(
     renderCodexFeedback(success({ session: { usedPercent: 25 } })).status,
@@ -143,3 +143,12 @@ function success(
 ): CoordinatedUsageResult {
   return { ok: true, usage: { windows, observedAt: 1 }, stale };
 }
+
+test("dial bars use level colors: brand <75, warn >=75, critical >=90, stale when stale or no data", () => {
+  const bar = (percent: number, stale = false) => renderCodexFeedback({ ...success({ week: { usedPercent: percent } }), stale } as never).indicator;
+  assert.deepEqual(bar(74.9), { value: 74.9, bar_fill_c: "#7127ff" });
+  assert.deepEqual(bar(75), { value: 75, bar_fill_c: "#ffb547" });
+  assert.deepEqual(bar(90), { value: 90, bar_fill_c: "#ff5470" });
+  assert.deepEqual(bar(95, true), { value: 95, bar_fill_c: "#6b5f8a" });
+  assert.deepEqual(renderCodexFeedback({ ok: false, error: new Error("x") } as never).indicator, { value: 0, bar_fill_c: "#6b5f8a" });
+});
