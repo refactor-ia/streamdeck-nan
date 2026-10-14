@@ -10059,7 +10059,43 @@ class NanSettingsWriteQueue {
     }
 }
 
-function renderNanDashboardFeedback(state, settings) {
+/**
+ * Consumption-pace projection for the monthly billing window (pure domain logic).
+ *
+ * Linear extrapolation at the current rate: rate = used / (now - periodStart).
+ * Edge cases return `null` (no projection) rather than a misleading number:
+ * no/zero cap, missing or invalid period bounds, end <= start, `now` outside the
+ * period, negative usage, or less than MIN_ELAPSED_MS elapsed (too noisy).
+ * Usage at or above the cap yields `capped`. Zero usage projects 0%.
+ * Staleness is the caller's concern: stale data must not be projected.
+ */
+const MIN_ELAPSED_MS = 6 * 3_600_000;
+function projectMonthlyPace({ used, cap, periodStart, periodEnd, now }) {
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(used) || used < 0)
+        return null;
+    const start = parseTime(periodStart);
+    const end = parseTime(periodEnd);
+    if (start === null || end === null || end <= start || now < start || now >= end)
+        return null;
+    if (used >= cap)
+        return { kind: "capped" };
+    const elapsed = now - start;
+    if (elapsed < MIN_ELAPSED_MS)
+        return null;
+    const rate = used / elapsed; // tokens per ms
+    const capHit = rate > 0 ? start + cap / rate : Number.POSITIVE_INFINITY;
+    if (capHit < end)
+        return { kind: "cap-date", at: new Date(capHit).toISOString() };
+    return { kind: "period-end-percent", percent: Math.round(rate * (end - start) / cap * 100) };
+}
+function parseTime(value) {
+    if (value === null)
+        return null;
+    const time = Date.parse(value);
+    return Number.isNaN(time) ? null : time;
+}
+
+function renderNanDashboardFeedback(state, settings, now = Date.now()) {
     const base = { title: "NaN", demo: "DASHBOARD" };
     const models = listNanModels(state);
     const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
@@ -10088,7 +10124,7 @@ function renderNanDashboardFeedback(state, settings) {
             model: model.model,
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
-            unit: `${formatPercentage(model.percentage)}% · ${model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL"}`,
+            unit: `${formatPercentage(model.percentage)}% · ${monthlyDetail(state, model, now)}`,
             indicator: bar(model.percentage, state.stale),
             status,
         };
@@ -10099,6 +10135,24 @@ function renderNanDashboardFeedback(state, settings) {
     const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
     const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
     return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: bar(undefined), status };
+}
+function monthlyDetail(state, model, now) {
+    // Stale usage against a live clock would skew the rate, so only fresh data is projected.
+    const pace = state.stale || !state.quota ? null
+        : projectMonthlyPace({ used: model.tokensUsed, cap: model.cap, periodStart: state.quota.periodStart ?? null, periodEnd: model.resetAt, now });
+    // The displayed API percentage is the source of truth for "cap reached", so the text never contradicts it.
+    if (!state.stale && model.percentage >= 100)
+        return "CAP REACHED";
+    if (pace && pace.kind !== "capped")
+        return formatPace(pace);
+    return model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL";
+}
+function formatPace(pace) {
+    switch (pace.kind) {
+        case "cap-date": return `CAP ${formatResetDate(pace.at)}`;
+        case "capped": return "CAP REACHED";
+        case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
+    }
 }
 function dashboardStatus(state) {
     switch (state.error) {

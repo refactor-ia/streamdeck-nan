@@ -36,7 +36,7 @@ test("previously removed models stay selectable and selected", () => {
 });
 
 test("dial renders capped, month-only and unused models", () => {
-  const capped = renderNanDashboardFeedback(state, { model: "glm5.3" });
+  const capped = renderNanDashboardFeedback(state, { model: "glm5.3" }, 0); // now before the period: no pace projection
   assert.match(capped.unit, /^14\.4% · RESETS NOV 5/);
   const month = renderNanDashboardFeedback(state, { model: "gemma4" });
   assert.deepEqual([month.model, month.value, month.indicator.value], ["gemma4", "5", 0]);

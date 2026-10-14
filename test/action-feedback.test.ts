@@ -52,7 +52,7 @@ test("NaN dashboard feedback preserves raw quota values and distinguishes safe e
     model: "capped", tokensUsed: 120, cap: 100, percentage: 120, resetAt: null, windowHours: 4,
   }], uncappedModels: [{ model: "uncapped", tokensUsed: 42, resetAt: null, windowHours: null }] };
   assert.deepEqual(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, {}), {
-    title: "NaN", demo: "DASHBOARD", model: "capped", value: "120 / 100", unit: "120% · PER MODEL", indicator: { value: 100, bar_fill_c: "#ff5470" }, status: "",
+    title: "NaN", demo: "DASHBOARD", model: "capped", value: "120 / 100", unit: "120% · CAP REACHED", indicator: { value: 100, bar_fill_c: "#ff5470" }, status: "",
   });
   const rolling = { tokensUsed: 30, budget: 100, percentage: 30, resetAt: null, windowHours: 4 };
   assert.deepEqual(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [{ ...quota.models[0], rolling }] }, stale: false }, {}), {

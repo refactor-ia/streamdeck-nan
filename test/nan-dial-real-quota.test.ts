@@ -21,7 +21,7 @@ test("dial renders every model of a real quota payload with percentage and reset
   assert.deepEqual([...models].sort(), ["deepseek-v4-flash", "glm5.3-flash", "mimo-v2.6-flash", "qwen3.8-flash"]);
 
   for (const model of models) {
-    const feedback = renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model });
+    const feedback = renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model }, 0); // now before the period: no pace projection
     assert.equal(feedback.model, model);
     assert.equal(feedback.status, "");
     assert.match(feedback.value, /^\S+ \/ \S+$/);
@@ -29,7 +29,7 @@ test("dial renders every model of a real quota payload with percentage and reset
     assert.ok(feedback.indicator.value > 0 && feedback.indicator.value < 100);
   }
 
-  const mimo = renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "mimo-v2.6-flash" });
+  const mimo = renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "mimo-v2.6-flash" }, 0);
   assert.match(mimo.unit, /^3\.3% · RESETS /);
 });
 
@@ -43,4 +43,43 @@ test("dial rotation cycles through all real quota models and wraps around", () =
   }
   assert.equal(seen.size, models.length);
   assert.equal(current, models[0]);
+});
+
+const DAY = 86_400_000;
+const octFirst = Date.UTC(2026, 9, 1);
+const paceQuota = (tokensUsed: number, extra: Record<string, unknown> = {}) => ({
+  eligibility: "unknown" as const,
+  periodStart: "2026-10-01",
+  uncappedModels: [],
+  models: [{ model: "m", tokensUsed, cap: 1000, percentage: tokensUsed / 10, resetAt: "2026-11-01T00:00:00Z", windowHours: null, ...extra }],
+});
+const dial = (quota: ReturnType<typeof paceQuota>, now: number, stale = false) =>
+  renderNanDashboardFeedback({ source: "dashboard", quota, stale }, {}, now);
+
+test("dial shows the projected cap date when the cap is hit before reset", () => {
+  assert.equal(dial(paceQuota(400), octFirst + 10 * DAY).unit, "40% · CAP OCT 26");
+});
+
+test("dial shows the projected percentage at reset when the cap is not reached", () => {
+  assert.equal(dial(paceQuota(100), octFirst + 10 * DAY).unit, "10% · ~31% AT RESET");
+});
+
+test("dial says CAP REACHED when usage is at or over the cap", () => {
+  assert.equal(dial(paceQuota(1200), octFirst + 10 * DAY).unit, "120% · CAP REACHED");
+});
+
+test("dial follows the API percentage when it disagrees with tokensUsed / cap", () => {
+  assert.equal(dial(paceQuota(1000, { percentage: 95 }), octFirst + 10 * DAY).unit, "95% · RESETS NOV 1");
+  assert.equal(dial(paceQuota(400, { percentage: 100 }), octFirst + 10 * DAY).unit, "100% · CAP REACHED");
+});
+
+test("dial keeps RESETS text when no projection is possible or data is stale", () => {
+  assert.equal(dial(paceQuota(100), octFirst + 3_600_000).unit, "10% · RESETS NOV 1");
+  assert.equal(dial(paceQuota(100), octFirst + 10 * DAY, true).unit, "10% · RESETS NOV 1");
+  assert.equal(dial({ ...paceQuota(100), periodStart: null as never }, octFirst + 10 * DAY).unit, "10% · RESETS NOV 1");
+});
+
+test("dial keeps the rolling window text for models with rolling usage", () => {
+  const rolling = { tokensUsed: 30, budget: 100, percentage: 30, resetAt: null, windowHours: 4 };
+  assert.equal(dial(paceQuota(400, { rolling }), octFirst + 10 * DAY).unit, "30% · ROLLING 4H");
 });
