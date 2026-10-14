@@ -11937,7 +11937,7 @@ function parseNanQuota(value) {
             ...(rolling ? { rolling } : {}),
         });
     }
-    return { eligibility: "unknown", models, uncappedModels };
+    return { eligibility: "unknown", periodStart: typeof value.periodStart === "string" ? value.periodStart : null, models, uncappedModels };
 }
 function parseRolling(entry, windowHours) {
     if (entry.windowTokensUsed === undefined || entry.windowTokensUsed === null)
@@ -12598,7 +12598,7 @@ function buildNanModelKeyView(state, settings, now) {
     if (capped) {
         return {
             label: modelAlias(selected),
-            rows: [{ label: windowLabel(capped.windowHours), percent: capped.percentage, reset: formatReset(capped.resetAt, now) }],
+            rows: cappedRows(capped, now),
             stale: state.stale,
         };
     }
@@ -12630,6 +12630,17 @@ function renderNanModelKeyImage(state, settings, now = Date.now()) {
     return renderKeyImage(buildNanModelKeyView(state, settings, now), normalizeKeyStyle(settings.keyStyle));
 }
 const NO_CAP = "NO CAP";
+/**
+ * The rolling window leads when reported; the billing period is always the monthly row.
+ * Without rolling data the capped percentage/reset belong to the billing period, so they are never labelled by windowHours.
+ */
+function cappedRows(model, now) {
+    const billing = { label: "MONTH", percent: model.percentage, reset: formatReset(model.resetAt, now) };
+    const { rolling } = model;
+    if (!rolling)
+        return [billing];
+    return [{ label: windowLabel(rolling.windowHours), percent: rolling.percentage, reset: formatReset(rolling.resetAt, now) }, billing];
+}
 /** Provider windows without hours are monthly; 168h is the weekly window. */
 function windowLabel(hours) {
     if (hours === null)
