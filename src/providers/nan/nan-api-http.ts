@@ -75,8 +75,8 @@ function parseRetryAfter(value: string | null, clock: NanHttpClock): number {
   if (value === null || value.trim() === "") return DEFAULT_RETRY_AFTER_MS;
   const seconds = Number(value);
   if (!Number.isNaN(seconds)) {
-    if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_RETRY_AFTER_MS;
-    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+    if (!Number.isFinite(seconds)) return DEFAULT_RETRY_AFTER_MS;
+    return seconds * 1000;
   }
   const date = Date.parse(value);
   if (!Number.isFinite(date)) return DEFAULT_RETRY_AFTER_MS;
