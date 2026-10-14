@@ -31,6 +31,11 @@ test("maps cap, tokensUsed and each model's own periodEnd without assuming a cal
   assert.deepEqual(quota.uncappedModels, []);
 });
 
+test("keeps the validated root periodStart and falls back to null when absent", () => {
+  assert.equal(parseNanQuota(payload).periodStart, "2026-10-01");
+  assert.equal(parseNanQuota({ models: [] }).periodStart, null);
+});
+
 test("allowance follows the dashboard: fullCap wins over a prorated first-period cap", () => {
   const quota = parseNanQuota({ models: [{ model: "m", tokensUsed: 50, cap: 100, fullCap: 200, periodEnd: "2026-11-01T00:00:00Z" }] });
   assert.equal(quota.models[0].cap, 200);
