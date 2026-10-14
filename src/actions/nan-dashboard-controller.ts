@@ -1,5 +1,6 @@
 import { NanApiKeyStore } from "../providers/nan/nan-api-key-store.js";
 import { NanApiUsageClient, NanApiUsageError, type NanApiUsageSnapshot } from "../providers/nan/nan-api-usage-provider.js";
+import { NanModelsClient, NanModelsError } from "../providers/nan/nan-api-models-provider.js";
 import { NanQuotaClient, type NanQuota } from "../providers/nan/nan-api-quota-provider.js";
 
 export type NanSource = "dashboard";
@@ -11,6 +12,8 @@ export type NanDashboardUsage = {
   readonly quota?: NanQuota;
   /** Month-to-date per model and all-time totals; the keypad renders one window per action. */
   readonly metrics?: NanApiUsageSnapshot;
+  /** Model ids the key can call (`/v1/models`); absent when the catalog is unavailable. */
+  readonly catalog?: readonly string[];
   readonly stale: boolean;
   readonly metricsStale?: boolean;
   readonly error?: NanDashboardError;
@@ -23,6 +26,7 @@ interface ApiKeys {
   clear(): Promise<void>;
 }
 interface UsageSource { getUsage(apiKey: string): Promise<NanApiUsageSnapshot>; }
+interface ModelsSource { getModels(apiKey: string): Promise<readonly string[]>; }
 interface QuotaSource { getQuota(apiKey: string): Promise<NanQuota>; }
 
 export interface NanDashboardWatchScheduler {
@@ -34,6 +38,7 @@ export interface NanDashboardControllerOptions {
   readonly keys?: ApiKeys;
   readonly usage?: UsageSource;
   readonly quota?: QuotaSource;
+  readonly models?: ModelsSource;
   readonly scheduler?: NanDashboardWatchScheduler;
   readonly now?: () => number;
 }
@@ -42,6 +47,8 @@ export interface NanDashboardControllerOptions {
 export class NanDashboardController {
   private lastQuota?: NanQuota;
   private lastMetrics?: NanApiUsageSnapshot;
+  private lastCatalog?: readonly string[];
+  private catalogCheckedAt = Number.NEGATIVE_INFINITY;
   private lastMetricsError?: NanDashboardMetricsError;
   private lastError?: NanDashboardError;
   private usageBackoffUntil = 0;
@@ -54,6 +61,7 @@ export class NanDashboardController {
   private readonly keys: ApiKeys;
   private readonly usage: UsageSource;
   private readonly quota: QuotaSource;
+  private readonly models: ModelsSource;
   private readonly scheduler: NanDashboardWatchScheduler;
   private readonly now: () => number;
 
@@ -61,6 +69,7 @@ export class NanDashboardController {
     this.keys = options.keys ?? new NanApiKeyStore();
     this.usage = options.usage ?? new NanApiUsageClient();
     this.quota = options.quota ?? new NanQuotaClient();
+    this.models = options.models ?? new NanModelsClient();
     this.scheduler = options.scheduler ?? defaultWatchScheduler;
     this.now = options.now ?? Date.now;
   }
@@ -125,6 +134,8 @@ export class NanDashboardController {
     this.lastQuota = undefined;
     this.lastMetrics = undefined;
     this.lastMetricsError = undefined;
+    this.lastCatalog = undefined;
+    this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
     this.lastError = undefined;
     this.usageBackoffUntil = 0;
     this.readInFlight = undefined;
@@ -156,13 +167,18 @@ export class NanDashboardController {
       return this.finish("needs-key");
     }
     const backingOff = this.now() < this.usageBackoffUntil;
-    const [usage, quota] = await Promise.allSettled([
+    const loadCatalog = this.now() - this.catalogCheckedAt >= CATALOG_REFRESH_MS;
+    if (loadCatalog) this.catalogCheckedAt = this.now();
+    const [usage, quota, catalog] = await Promise.allSettled([
       backingOff ? Promise.resolve(undefined) : this.usage.getUsage(apiKey),
       this.quota.getQuota(apiKey),
+      loadCatalog ? this.models.getModels(apiKey) : Promise.resolve(undefined),
     ]);
     // A late result from the previous key must never repopulate either snapshot.
     if (epoch !== this.epoch) return this.cachedUsage();
-    if (usage.status === "rejected" && usage.reason instanceof NanApiUsageError && usage.reason.kind === "auth-rejected") {
+    const rejected = (usage.status === "rejected" && usage.reason instanceof NanApiUsageError && usage.reason.kind === "auth-rejected")
+      || (catalog.status === "rejected" && catalog.reason instanceof NanModelsError && catalog.reason.kind === "auth-rejected");
+    if (rejected) {
       this.clearAll();
       return this.finish("key-rejected");
     }
@@ -181,6 +197,9 @@ export class NanDashboardController {
       }
     }
     if (backingOff) this.lastMetricsError = "transient";
+    // The catalog changes rarely: keep the last good list and retry on the next hourly check.
+    if (catalog.status === "fulfilled" && catalog.value) this.lastCatalog = catalog.value;
+    else if (catalog.status === "rejected") this.catalogCheckedAt = this.now() - CATALOG_REFRESH_MS + CATALOG_RETRY_MS;
     // The quota endpoint is undocumented: any failure hides only the quota.
     this.lastQuota = quota.status === "fulfilled" ? quota.value : undefined;
     this.lastError = undefined;
@@ -195,6 +214,8 @@ export class NanDashboardController {
   }
 
   private clearAll(): void {
+    this.lastCatalog = undefined;
+    this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
     this.lastQuota = undefined;
     this.lastMetrics = undefined;
     this.lastMetricsError = undefined;
@@ -211,12 +232,16 @@ export class NanDashboardController {
       source: "dashboard",
       ...(this.lastQuota ? { quota: this.lastQuota } : {}),
       ...(this.lastMetrics ? { metrics: this.lastMetrics } : {}),
+      ...(this.lastCatalog ? { catalog: this.lastCatalog } : {}),
       stale: false,
       ...(this.lastMetrics ? { metricsStale: this.lastMetricsError !== undefined } : {}),
       ...(this.lastMetricsError ? { metricsError: this.lastMetricsError } : {}),
     };
   }
 }
+
+const CATALOG_REFRESH_MS = 60 * 60_000;
+const CATALOG_RETRY_MS = 5 * 60_000;
 
 function isDashboardSource(source: unknown): boolean {
   return source === undefined || source === "dashboard" || source === "legacy";

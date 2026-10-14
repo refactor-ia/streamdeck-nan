@@ -11,7 +11,7 @@ import {
 } from "@elgato/streamdeck";
 import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
-import { cycleNanLiveModel, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
+import { cycleNanLiveModel, listNanModels, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
 import { renderNanDashboardFeedback } from "./usage-feedback.js";
 import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 
@@ -114,7 +114,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   }
 
   private rotateSettings(settings: NanDemoSettings, state: NanDashboardUsage, ticks: number): NanDemoSettings {
-    const models = state.quota?.models.map(({ model }) => model) ?? [];
+    const models = listNanModels(state);
     if (models.length === 0) return settings;
     const current = resolveNanLiveModel(models, models, settings.model);
     return { ...settings, model: cycleNanLiveModel(models, current, ticks) };

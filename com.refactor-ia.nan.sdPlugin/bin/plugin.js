@@ -9973,18 +9973,28 @@ class UsageProviderCoordinator {
     }
 }
 
-const REMOVED_NAN_MODELS = new Set(["glm5.2", "flux-2-klein"]);
 function isSelectableNanLiveModel(model) {
     return typeof model === "string" && model.length > 0 && model.length <= 128
-        && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model) && !REMOVED_NAN_MODELS.has(model);
+        && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model);
 }
 function cycleNanLiveModel(models, current, ticks) {
     const selected = models.indexOf(current ?? ""), index = selected === -1 ? (ticks > 0 ? -1 : 0) : selected;
     return models[((index + ticks) % models.length + models.length) % models.length];
 }
+function mergeNanLiveModels(catalog, observed) {
+    return [...new Set([...catalog, ...observed].filter(isSelectableNanLiveModel))];
+}
 function resolveNanLiveModel(models, observed, selected) {
     const validObserved = observed.filter(isSelectableNanLiveModel);
     return isSelectableNanLiveModel(selected) && models.includes(selected) ? selected : validObserved[0] ?? models[0];
+}
+/** Ordered union rendered by every NaN model surface: catalog, then quota, then month usage. */
+function listNanModels(state) {
+    return mergeNanLiveModels(state.catalog ?? [], [
+        ...(state.quota?.models.map(({ model }) => model) ?? []),
+        ...(state.quota?.uncappedModels.map(({ model }) => model) ?? []),
+        ...(state.metrics?.monthToDate.byModel.map(({ model }) => model) ?? []),
+    ]);
 }
 async function persistLatestNanSettings(generation, settings, latest, writeSettings, isCurrent = () => true, canReconcile = isCurrent) {
     let targetGeneration = generation;
@@ -10025,12 +10035,16 @@ class NanSettingsWriteQueue {
 
 function renderNanDashboardFeedback(state, settings) {
     const base = { title: "NaN", demo: "DASHBOARD" };
-    if (!state.quota) {
+    const models = listNanModels(state);
+    const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
+    if (!selected) {
+        if (!state.error && state.quota)
+            return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
         return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
     }
-    const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
-    if (selected) {
-        const model = state.quota.models.find((entry) => entry.model === selected);
+    const status = state.stale ? "STALE" : "";
+    const model = state.quota?.models.find((entry) => entry.model === selected);
+    if (model) {
         const period = model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}`
             : model.windowHours ? `ROLLING ${model.windowHours}H` : "PER MODEL";
         return {
@@ -10040,13 +10054,15 @@ function renderNanDashboardFeedback(state, settings) {
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
             unit: `${formatPercentage$1(model.percentage)}% · ${period}`,
             indicator: Math.min(100, Math.max(0, model.percentage)),
-            status: state.stale ? "STALE" : "",
+            status,
         };
     }
-    const uncapped = state.quota.uncappedModels[0];
+    const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
     if (uncapped)
-        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
-    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
+        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status };
+    const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
+    const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
+    return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: 0, status };
 }
 function dashboardStatus(state) {
     switch (state.error) {
@@ -11670,7 +11686,7 @@ function safeCancel(body) {
 }
 
 const NAN_API_USAGE_URL = `${NAN_USAGE_ORIGIN}/v1/usage`;
-const MAX_RESPONSE_BYTES$1 = 256 * 1024;
+const MAX_RESPONSE_BYTES$2 = 256 * 1024;
 class NanApiUsageError extends Error {
     kind;
     retryAfterMs;
@@ -11702,7 +11718,7 @@ class NanApiUsageClient {
             apiKey,
             fetcher: this.fetcher,
             clock: this.clock,
-            maxResponseBytes: MAX_RESPONSE_BYTES$1,
+            maxResponseBytes: MAX_RESPONSE_BYTES$2,
             createError: (kind, retryAfterMs) => new NanApiUsageError(kind, retryAfterMs),
             isExpectedError: (error) => error instanceof NanApiUsageError,
         });
@@ -11720,7 +11736,7 @@ function parseNanApiUsage(value) {
     const names = new Set();
     const byModel = [];
     for (const entry of totals.by_model) {
-        if (!isRecord$1(entry) || !isModelName$1(entry.model) || names.has(entry.model)
+        if (!isRecord$1(entry) || !isModelName$2(entry.model) || names.has(entry.model)
             || !isCounter$1(entry.prompt_tokens) || !isCounter$1(entry.completion_tokens) || !isCounter$1(entry.total_tokens)) {
             throw new NanApiUsageError("schema");
         }
@@ -11747,7 +11763,7 @@ function parseNanApiUsage(value) {
 function isRecord$1(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function isModelName$1(value) {
+function isModelName$2(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 128
         && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
@@ -11756,6 +11772,64 @@ function isCounter$1(value) {
 }
 function isIsoTimestamp$1(value) {
     return /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(new Date(value).valueOf());
+}
+
+/** Documented OpenAI-compatible catalog: the source of truth for what the key can call. */
+const NAN_API_MODELS_URL = `${NAN_USAGE_ORIGIN}/v1/models`;
+const MAX_RESPONSE_BYTES$1 = 256 * 1024;
+const MAX_MODELS = 512;
+class NanModelsError extends Error {
+    kind;
+    retryAfterMs;
+    constructor(kind, retryAfterMs) {
+        super(kind === "auth-rejected" ? "NaN API rejected the key"
+            : kind === "rate-limited" ? "NaN API rate limit reached"
+                : kind === "schema" ? "NaN models response invalid" : "NaN API unavailable");
+        this.name = "NanModelsError";
+        this.kind = kind;
+        if (retryAfterMs !== undefined)
+            this.retryAfterMs = retryAfterMs;
+    }
+}
+class NanModelsClient {
+    fetcher;
+    clock;
+    constructor(fetcher = fetch, clock) {
+        this.fetcher = fetcher;
+        this.clock = clock;
+    }
+    /** Returns the unique model ids in the order the API lists them. */
+    async getModels(apiKey) {
+        const value = await getNanJson({
+            url: NAN_API_MODELS_URL,
+            apiKey,
+            fetcher: this.fetcher,
+            clock: this.clock,
+            maxResponseBytes: MAX_RESPONSE_BYTES$1,
+            createError: (kind, retryAfterMs) => new NanModelsError(kind, retryAfterMs),
+            isExpectedError: (error) => error instanceof NanModelsError,
+        });
+        return parseNanModels(value);
+    }
+}
+function parseNanModels(value) {
+    if (typeof value !== "object" || value === null || value.object !== "list")
+        throw new NanModelsError("schema");
+    const data = value.data;
+    if (!Array.isArray(data) || data.length > MAX_MODELS)
+        throw new NanModelsError("schema");
+    const ids = new Set();
+    for (const entry of data) {
+        const id = typeof entry === "object" && entry !== null ? entry.id : undefined;
+        if (!isModelName$1(id))
+            throw new NanModelsError("schema");
+        ids.add(id);
+    }
+    return Object.freeze([...ids]);
+}
+function isModelName$1(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 128
+        && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
 
 /** Undocumented dashboard backend; reached with a fixed origin, no redirects and strict validation. */
@@ -11894,6 +11968,8 @@ function calendarDate(value) {
 class NanDashboardController {
     lastQuota;
     lastMetrics;
+    lastCatalog;
+    catalogCheckedAt = Number.NEGATIVE_INFINITY;
     lastMetricsError;
     lastError;
     usageBackoffUntil = 0;
@@ -11906,12 +11982,14 @@ class NanDashboardController {
     keys;
     usage;
     quota;
+    models;
     scheduler;
     now;
     constructor(options = {}) {
         this.keys = options.keys ?? new NanApiKeyStore();
         this.usage = options.usage ?? new NanApiUsageClient();
         this.quota = options.quota ?? new NanQuotaClient();
+        this.models = options.models ?? new NanModelsClient();
         this.scheduler = options.scheduler ?? defaultWatchScheduler;
         this.now = options.now ?? Date.now;
     }
@@ -11982,6 +12060,8 @@ class NanDashboardController {
         this.lastQuota = undefined;
         this.lastMetrics = undefined;
         this.lastMetricsError = undefined;
+        this.lastCatalog = undefined;
+        this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
         this.lastError = undefined;
         this.usageBackoffUntil = 0;
         this.readInFlight = undefined;
@@ -12018,14 +12098,20 @@ class NanDashboardController {
             return this.finish("needs-key");
         }
         const backingOff = this.now() < this.usageBackoffUntil;
-        const [usage, quota] = await Promise.allSettled([
+        const loadCatalog = this.now() - this.catalogCheckedAt >= CATALOG_REFRESH_MS;
+        if (loadCatalog)
+            this.catalogCheckedAt = this.now();
+        const [usage, quota, catalog] = await Promise.allSettled([
             backingOff ? Promise.resolve(undefined) : this.usage.getUsage(apiKey),
             this.quota.getQuota(apiKey),
+            loadCatalog ? this.models.getModels(apiKey) : Promise.resolve(undefined),
         ]);
         // A late result from the previous key must never repopulate either snapshot.
         if (epoch !== this.epoch)
             return this.cachedUsage();
-        if (usage.status === "rejected" && usage.reason instanceof NanApiUsageError && usage.reason.kind === "auth-rejected") {
+        const rejected = (usage.status === "rejected" && usage.reason instanceof NanApiUsageError && usage.reason.kind === "auth-rejected")
+            || (catalog.status === "rejected" && catalog.reason instanceof NanModelsError && catalog.reason.kind === "auth-rejected");
+        if (rejected) {
             this.clearAll();
             return this.finish("key-rejected");
         }
@@ -12047,6 +12133,11 @@ class NanDashboardController {
         }
         if (backingOff)
             this.lastMetricsError = "transient";
+        // The catalog changes rarely: keep the last good list and retry on the next hourly check.
+        if (catalog.status === "fulfilled" && catalog.value)
+            this.lastCatalog = catalog.value;
+        else if (catalog.status === "rejected")
+            this.catalogCheckedAt = this.now() - CATALOG_REFRESH_MS + CATALOG_RETRY_MS;
         // The quota endpoint is undocumented: any failure hides only the quota.
         this.lastQuota = quota.status === "fulfilled" ? quota.value : undefined;
         this.lastError = undefined;
@@ -12059,6 +12150,8 @@ class NanDashboardController {
         return this.cachedUsage();
     }
     clearAll() {
+        this.lastCatalog = undefined;
+        this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
         this.lastQuota = undefined;
         this.lastMetrics = undefined;
         this.lastMetricsError = undefined;
@@ -12076,12 +12169,15 @@ class NanDashboardController {
             source: "dashboard",
             ...(this.lastQuota ? { quota: this.lastQuota } : {}),
             ...(this.lastMetrics ? { metrics: this.lastMetrics } : {}),
+            ...(this.lastCatalog ? { catalog: this.lastCatalog } : {}),
             stale: false,
             ...(this.lastMetrics ? { metricsStale: this.lastMetricsError !== undefined } : {}),
             ...(this.lastMetricsError ? { metricsError: this.lastMetricsError } : {}),
         };
     }
 }
+const CATALOG_REFRESH_MS = 60 * 60_000;
+const CATALOG_RETRY_MS = 5 * 60_000;
 function isDashboardSource(source) {
     return source === undefined || source === "dashboard" || source === "legacy";
 }
@@ -12241,7 +12337,7 @@ let NanDemoUsage = (() => {
             await this.render(action, state, settings);
         }
         rotateSettings(settings, state, ticks) {
-            const models = state.quota?.models.map(({ model }) => model) ?? [];
+            const models = listNanModels(state);
             if (models.length === 0)
                 return settings;
             const current = resolveNanLiveModel(models, models, settings.model);
@@ -12350,7 +12446,9 @@ function renderNanModelUsageSvg(state, settings) {
                 ? monthly(monthlyModel, state.metricsStale === true || state.stale)
                 : !state.quota && !state.metrics
                     ? unavailable(state)
-                    : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
+                    : state.catalog?.includes(selected)
+                        ? noCap(selected, state.metrics ? "0" : "--", state.metricsStale === true || state.stale)
+                        : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
     const foreground = display.foreground ?? THEME.fg;
     const [firstLabel = "", secondLabel = ""] = display.label;
     const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
@@ -12400,12 +12498,15 @@ function monthly(model, stale) {
         label: labelLines(model.model),
         primary: compact$1(model.totalTokens),
         secondary: "MONTH TOKENS",
-        tertiary: `MTD · IN ${compact$1(model.inputTokens)} OUT ${compact$1(model.outputTokens)}`,
+        tertiary: "NO CAP · MTD",
         status: stale ? "STALE" : "",
         statusColor: THEME.warn,
         accent: stale ? THEME.warn : THEME.violetSoft,
         gauge: 0,
     };
+}
+function noCap(model, primary, stale) {
+    return { label: labelLines(model), primary, secondary: "MONTH TOKENS", tertiary: "NO CAP", status: stale ? "STALE" : "", statusColor: THEME.warn, accent: stale ? THEME.warn : THEME.muted, gauge: 0 };
 }
 function unavailable(state) {
     const { error } = state;
@@ -12542,13 +12643,11 @@ let NanModelUsage = (() => {
             // response if the inspector changed while an asynchronous shared refresh completed.
             if (streamDeck.ui.action?.id !== action.id)
                 return Promise.resolve();
-            const models = [
-                ...(usage.quota?.models.map(({ model }) => ({ id: model, kind: "capped" })) ?? []),
-                ...(usage.quota?.uncappedModels.map(({ model }) => ({ id: model, kind: "uncapped" })) ?? []),
-                ...(usage.metrics?.monthToDate.byModel
-                    .filter(({ model }) => !usage.quota?.models.some((quota) => quota.model === model) && !usage.quota?.uncappedModels.some((quota) => quota.model === model))
-                    .map(({ model }) => ({ id: model, kind: "monthly" })) ?? []),
-            ];
+            const models = listNanModels(usage).map((id) => ({
+                id,
+                kind: usage.quota?.models.some(({ model }) => model === id) ? "capped"
+                    : usage.quota?.uncappedModels.some(({ model }) => model === id) ? "uncapped" : "monthly",
+            }));
             return streamDeck.ui.sendToPropertyInspector({ kind: MODELS, models });
         }
     });

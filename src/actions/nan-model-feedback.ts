@@ -40,7 +40,9 @@ export function renderNanModelUsageSvg(state: NanDashboardUsage, settings: NanMo
         ? monthly(monthlyModel, state.metricsStale === true || state.stale)
         : !state.quota && !state.metrics
           ? unavailable(state)
-          : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
+          : state.catalog?.includes(selected)
+            ? noCap(selected, state.metrics ? "0" : "--", state.metricsStale === true || state.stale)
+            : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
   const foreground = display.foreground ?? THEME.fg;
   const [firstLabel = "", secondLabel = ""] = display.label;
   const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
@@ -95,12 +97,16 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
     label: labelLines(model.model),
     primary: compact(model.totalTokens),
     secondary: "MONTH TOKENS",
-    tertiary: `MTD · IN ${compact(model.inputTokens)} OUT ${compact(model.outputTokens)}`,
+    tertiary: "NO CAP · MTD",
     status: stale ? "STALE" : "",
     statusColor: THEME.warn,
     accent: stale ? THEME.warn : THEME.violetSoft,
     gauge: 0,
   };
+}
+
+function noCap(model: string, primary: string, stale: boolean): Display {
+  return { label: labelLines(model), primary, secondary: "MONTH TOKENS", tertiary: "NO CAP", status: stale ? "STALE" : "", statusColor: THEME.warn, accent: stale ? THEME.warn : THEME.muted, gauge: 0 };
 }
 
 function unavailable(state: NanDashboardUsage): Display {

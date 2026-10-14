@@ -1,9 +1,10 @@
-const REMOVED_NAN_MODELS = new Set(["glm5.2", "flux-2-klein"]);
+import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
+
 const LEGACY_DEFAULT_NAN_MODEL = "deepseek-v4-flash";
 
 export function isSelectableNanLiveModel(model: unknown): model is string {
   return typeof model === "string" && model.length > 0 && model.length <= 128
-    && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model) && !REMOVED_NAN_MODELS.has(model);
+    && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model);
 }
 
 export function cycleNanLiveModel(models: readonly string[], current: string | undefined, ticks: number): string {
@@ -20,8 +21,17 @@ export function resolveNanLiveModel(models: readonly string[], observed: readonl
   return isSelectableNanLiveModel(selected) && models.includes(selected) ? selected : validObserved[0] ?? models[0];
 }
 
+/** Ordered union rendered by every NaN model surface: catalog, then quota, then month usage. */
+export function listNanModels(state: NanDashboardUsage): string[] {
+  return mergeNanLiveModels(state.catalog ?? [], [
+    ...(state.quota?.models.map(({ model }) => model) ?? []),
+    ...(state.quota?.uncappedModels.map(({ model }) => model) ?? []),
+    ...(state.metrics?.monthToDate.byModel.map(({ model }) => model) ?? []),
+  ]);
+}
+
 export function migrateRemovedNanModel(model?: string): string | undefined {
-  return model !== undefined && REMOVED_NAN_MODELS.has(model) ? LEGACY_DEFAULT_NAN_MODEL : model;
+  return model;
 }
 
 export function migrateNanLiveSettings<T extends { model?: string }>(settings: T): T {

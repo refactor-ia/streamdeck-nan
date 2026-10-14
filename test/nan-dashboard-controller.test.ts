@@ -27,13 +27,16 @@ class FakeApis {
   quotaCalls: string[] = [];
   usageResult: () => Promise<NanApiUsageSnapshot> = async () => metrics;
   quotaResult: () => Promise<NanQuota> = async () => quota;
+  modelsCalls: string[] = [];
+  modelsResult: () => Promise<readonly string[]> = async () => ["catalog-model"];
+  models = { getModels: async (key: string) => { this.modelsCalls.push(key); return this.modelsResult(); } };
   usage = { getUsage: async (key: string) => { this.usageCalls.push(key); return this.usageResult(); } };
   quota_ = { getQuota: async (key: string) => { this.quotaCalls.push(key); return this.quotaResult(); } };
 }
 function create(overrides: { now?: () => number; scheduler?: FakeWatchScheduler } = {}) {
   const keys = new FakeKeys();
   const apis = new FakeApis();
-  const controller = new NanDashboardController({ keys, usage: apis.usage, quota: apis.quota_, now: overrides.now, scheduler: overrides.scheduler });
+  const controller = new NanDashboardController({ keys, usage: apis.usage, quota: apis.quota_, models: apis.models, now: overrides.now, scheduler: overrides.scheduler });
   return { controller, keys, apis };
 }
 
@@ -182,3 +185,18 @@ class FakeWatchScheduler {
 }
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } { let resolve!: (value: T) => void; const promise = new Promise<T>((resolver) => { resolve = resolver; }); return { promise, resolve }; }
 async function waitFor(predicate: () => boolean): Promise<void> { while (!predicate()) await new Promise((resolve) => setImmediate(resolve)); }
+
+test("catalog is fetched hourly, survives a failure and never blocks usage", async () => {
+  let now = 0;
+  const { controller, apis } = create({ now: () => now });
+  assert.deepEqual((await controller.getUsage({})).catalog, ["catalog-model"]);
+  await controller.getUsage({});
+  assert.equal(apis.modelsCalls.length, 1, "catalog is cached between reads");
+  now = 61 * 60_000;
+  apis.modelsResult = async () => { throw new Error("down"); };
+  const failed = await controller.getUsage({});
+  assert.equal(apis.modelsCalls.length, 2);
+  assert.deepEqual(failed.catalog, ["catalog-model"]);
+  assert.equal(failed.metrics, metrics);
+  assert.equal(failed.error, undefined);
+});

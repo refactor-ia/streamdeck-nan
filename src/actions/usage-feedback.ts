@@ -1,6 +1,6 @@
 import type { CoordinatedUsageResult } from "../usage/provider-coordinator.js";
 import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
-import { resolveNanLiveModel } from "./nan-live-model.js";
+import { listNanModels, resolveNanLiveModel } from "./nan-live-model.js";
 
 export interface ClaudeFeedback {
   readonly [key: string]: string | number;
@@ -45,12 +45,15 @@ export interface NanDashboardFeedback {
 
 export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: { model?: string }): NanDashboardFeedback {
   const base = { title: "NaN" as const, demo: "DASHBOARD" as const };
-  if (!state.quota) {
+  const models = listNanModels(state);
+  const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
+  if (!selected) {
+    if (!state.error && state.quota) return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
     return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
   }
-  const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
-  if (selected) {
-    const model = state.quota.models.find((entry) => entry.model === selected)!;
+  const status = state.stale ? "STALE" : "";
+  const model = state.quota?.models.find((entry) => entry.model === selected);
+  if (model) {
     const period = model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}`
       : model.windowHours ? `ROLLING ${model.windowHours}H` : "PER MODEL";
     return {
@@ -60,12 +63,14 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
       // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
       unit: `${formatPercentage(model.percentage)}% · ${period}`,
       indicator: Math.min(100, Math.max(0, model.percentage)),
-      status: state.stale ? "STALE" : "",
+      status,
     };
   }
-  const uncapped = state.quota.uncappedModels[0];
-  if (uncapped) return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
-  return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
+  const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
+  if (uncapped) return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status };
+  const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
+  const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
+  return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: 0, status };
 }
 
 function dashboardStatus(state: NanDashboardUsage): NanDashboardFeedback["status"] {

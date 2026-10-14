@@ -182,7 +182,8 @@ test("metrics-only keys render month-to-date totals without an invented cap or p
   assert.match(qwen, />15<\/text>/);
   assert.match(qwen, /MONTH TOKENS/);
   assert.match(qwen, /MTD/);
-  assert.doesNotMatch(qwen, /CAP|%|UNCAPPED/);
+  assert.match(qwen, /NO CAP/);
+  assert.doesNotMatch(qwen, /%|UNCAPPED|CAP \d/);
   const zero = renderNanModelUsageSvg(metricsOnly, { model: "gemma4" });
   assert.match(zero, />0<\/text>/);
   assert.match(zero, /MONTH TOKENS/);
