@@ -10,13 +10,14 @@ import require$$0 from 'zlib';
 import require$$0$1 from 'buffer';
 import require$$2 from 'util';
 import fs, { existsSync, readFileSync, constants as constants$1 } from 'node:fs';
-import path, { join, isAbsolute, dirname, relative } from 'node:path';
+import path, { join, isAbsolute, dirname, relative, resolve, sep } from 'node:path';
 import { cwd } from 'node:process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, pbkdf2Sync, createDecipheriv, createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { realpath, stat, access } from 'node:fs/promises';
+import { realpath, stat, access, readdir, lstat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -9282,7 +9283,7 @@ function sanitizeUsageError(error, fallback = "unavailable") {
         : new UsageProviderError(fallback);
 }
 function normalizeUsageSnapshot(value) {
-    if (!isRecord$8(value) || !Number.isFinite(value.observedAt) || !isRecord$8(value.windows)) {
+    if (!isRecord$9(value) || !Number.isFinite(value.observedAt) || !isRecord$9(value.windows)) {
         return undefined;
     }
     const windows = {};
@@ -9305,12 +9306,12 @@ function normalizeUsageSnapshot(value) {
     return { windows, observedAt: value.observedAt };
 }
 function isUsageWindow(value) {
-    return (isRecord$8(value) &&
+    return (isRecord$9(value) &&
         Number.isFinite(value.usedPercent) &&
         (value.windowMinutes === undefined || Number.isFinite(value.windowMinutes)) &&
         (value.resetsAt === undefined || typeof value.resetsAt === "string"));
 }
-function isRecord$8(value) {
+function isRecord$9(value) {
     return typeof value === "object" && value !== null;
 }
 
@@ -9572,21 +9573,21 @@ function parseClaudeUsage(stdout) {
     catch {
         return undefined;
     }
-    if (!isRecord$7(payload) || typeof payload.result !== "string" || !hasZeroInference(payload)) {
+    if (!isRecord$8(payload) || typeof payload.result !== "string" || !hasZeroInference(payload)) {
         return undefined;
     }
     const windows = {};
     for (const line of payload.result.split(/\r?\n/)) {
         const session = /^\s*Current session:\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
         if (session)
-            windows.session = parseWindow$1(session[1]);
+            windows.session = parseWindow$2(session[1]);
         const week = /^\s*Current week \(all models\):\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
         if (week)
-            windows.week = parseWindow$1(week[1]);
+            windows.week = parseWindow$2(week[1]);
     }
     return windows.session && windows.week ? windows : undefined;
 }
-function parseWindow$1(value) {
+function parseWindow$2(value) {
     const usedPercent = Number(value);
     return Number.isFinite(usedPercent) && usedPercent >= 0 && usedPercent <= 100
         ? { usedPercent }
@@ -9596,8 +9597,8 @@ function hasZeroInference(payload) {
     if (payload.num_turns !== 0
         || payload.duration_api_ms !== 0
         || payload.total_cost_usd !== 0
-        || !isRecord$7(payload.usage)
-        || !isRecord$7(payload.modelUsage)
+        || !isRecord$8(payload.usage)
+        || !isRecord$8(payload.modelUsage)
         || Object.keys(payload.modelUsage).length !== 0)
         return false;
     const totals = hasOnlyZeroUsageTotals(payload.usage);
@@ -9612,7 +9613,7 @@ function hasOnlyZeroUsageTotals(value) {
             }
             found = true;
         }
-        else if (isRecord$7(item)) {
+        else if (isRecord$8(item)) {
             const nested = hasOnlyZeroUsageTotals(item);
             if (!nested.valid)
                 return nested;
@@ -9625,15 +9626,15 @@ function failure(code) {
     return { ok: false, error: new UsageProviderError(code) };
 }
 function errorCode(error) {
-    return isRecord$7(error) ? error.code : undefined;
+    return isRecord$8(error) ? error.code : undefined;
 }
 function isTimeout(error) {
-    return errorCode(error) === "ETIMEDOUT" || (isRecord$7(error) && error.killed === true);
+    return errorCode(error) === "ETIMEDOUT" || (isRecord$8(error) && error.killed === true);
 }
 function isMaxBufferError(error) {
     return errorCode(error) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
 }
-function isRecord$7(value) {
+function isRecord$8(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -9973,28 +9974,18 @@ class UsageProviderCoordinator {
     }
 }
 
+const REMOVED_NAN_MODELS = new Set(["glm5.2", "flux-2-klein"]);
 function isSelectableNanLiveModel(model) {
     return typeof model === "string" && model.length > 0 && model.length <= 128
-        && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model);
+        && model.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(model) && !REMOVED_NAN_MODELS.has(model);
 }
 function cycleNanLiveModel(models, current, ticks) {
     const selected = models.indexOf(current ?? ""), index = selected === -1 ? (ticks > 0 ? -1 : 0) : selected;
     return models[((index + ticks) % models.length + models.length) % models.length];
 }
-function mergeNanLiveModels(catalog, observed) {
-    return [...new Set([...catalog, ...observed].filter(isSelectableNanLiveModel))];
-}
 function resolveNanLiveModel(models, observed, selected) {
     const validObserved = observed.filter(isSelectableNanLiveModel);
     return isSelectableNanLiveModel(selected) && models.includes(selected) ? selected : validObserved[0] ?? models[0];
-}
-/** Ordered union rendered by every NaN model surface: catalog, then quota, then month usage. */
-function listNanModels(state) {
-    return mergeNanLiveModels(state.catalog ?? [], [
-        ...(state.quota?.models.map(({ model }) => model) ?? []),
-        ...(state.quota?.uncappedModels.map(({ model }) => model) ?? []),
-        ...(state.metrics?.monthToDate.byModel.map(({ model }) => model) ?? []),
-    ]);
 }
 async function persistLatestNanSettings(generation, settings, latest, writeSettings, isCurrent = () => true, canReconcile = isCurrent) {
     let targetGeneration = generation;
@@ -10035,16 +10026,12 @@ class NanSettingsWriteQueue {
 
 function renderNanDashboardFeedback(state, settings) {
     const base = { title: "NaN", demo: "DASHBOARD" };
-    const models = listNanModels(state);
-    const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
-    if (!selected) {
-        if (!state.error && state.quota)
-            return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
-        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state) };
+    if (!state.quota) {
+        return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: dashboardStatus(state.error) };
     }
-    const status = state.stale ? "STALE" : "";
-    const model = state.quota?.models.find((entry) => entry.model === selected);
-    if (model) {
+    const selected = resolveNanLiveModel(state.quota.models.map(({ model }) => model), state.quota.models.map(({ model }) => model), settings.model);
+    if (selected) {
+        const model = state.quota.models.find((entry) => entry.model === selected);
         const period = model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}`
             : model.windowHours ? `ROLLING ${model.windowHours}H` : "PER MODEL";
         return {
@@ -10052,28 +10039,33 @@ function renderNanDashboardFeedback(state, settings) {
             model: model.model,
             value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
             // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
-            unit: `${formatPercentage$1(model.percentage)}% · ${period}`,
+            unit: `${formatPercentage(model.percentage)}% · ${period}`,
             indicator: Math.min(100, Math.max(0, model.percentage)),
-            status,
+            status: state.stale ? "STALE" : "",
         };
     }
-    const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
+    const uncapped = state.quota.uncappedModels[0];
     if (uncapped)
-        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status };
-    const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
-    const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
-    return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: 0, status };
+        return { ...base, model: uncapped.model, value: `${compactNumber(uncapped.tokensUsed)} · UNCAPPED`, unit: "PROVIDER QUOTA · ELIGIBILITY UNKNOWN", indicator: 0, status: state.stale ? "STALE" : "" };
+    return { ...base, model: "Dashboard", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "NO QUOTA" };
 }
-function dashboardStatus(state) {
-    switch (state.error) {
-        case "needs-key": return "ADD API KEY";
-        case "key-rejected": return "KEY REJECTED";
+function renderNanImportProgress() {
+    return { title: "NaN", demo: "DASHBOARD", model: "Chrome session", value: "--", unit: "PROVIDER QUOTA", indicator: 0, status: "IMPORTING" };
+}
+function dashboardStatus(error) {
+    switch (error) {
+        case "needs-import": return "IMPORT SESSION";
         case "keychain-unavailable": return "KEYCHAIN UNAVAILABLE";
+        case "eviction-failed": return "SESSION RESET FAILED";
+        case "schema-invalid": return "QUOTA INVALID";
+        case "transient": return "DASHBOARD UNAVAILABLE";
+        case "import-unavailable": return "IMPORT UNAVAILABLE";
+        case "import-busy": return "IMPORT BUSY";
         case "invalid-source": return "INVALID SOURCE";
-        default: return state.metricsError === "transient" ? "DASHBOARD UNAVAILABLE" : "NO QUOTA";
+        default: return "NO QUOTA";
     }
 }
-function formatPercentage$1(value) {
+function formatPercentage(value) {
     return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
 }
 function formatCountdown(isoString) {
@@ -10625,7 +10617,7 @@ class CodexAppServerClient {
             this.terminate(new UsageProviderError("invalid-response"));
             return false;
         }
-        if (!isRecord$6(message) || !Number.isInteger(message.id))
+        if (!isRecord$7(message) || !Number.isInteger(message.id))
             return true;
         const id = message.id;
         const pending = this.pending.get(id);
@@ -10762,11 +10754,11 @@ class CodexAppServerClient {
 function classifyStartError(error) {
     if (error instanceof UsageProviderError)
         return error;
-    return isRecord$6(error) && error.code === "ENOENT"
+    return isRecord$7(error) && error.code === "ENOENT"
         ? new UsageProviderError("executable-not-found")
         : new UsageProviderError("unavailable");
 }
-function isRecord$6(value) {
+function isRecord$7(value) {
     return typeof value === "object" && value !== null;
 }
 function getImmediateStop(creation) {
@@ -10810,16 +10802,16 @@ class CodexUsageProvider {
     }
 }
 function parseRateLimits(value) {
-    if (!isRecord$5(value))
+    if (!isRecord$6(value))
         return undefined;
-    const rateLimits = isRecord$5(value.rateLimits)
+    const rateLimits = isRecord$6(value.rateLimits)
         ? value.rateLimits
-        : isRecord$5(value.rate_limits)
+        : isRecord$6(value.rate_limits)
             ? value.rate_limits
             : value;
     const windows = {};
-    addWindow(windows, parseWindow(rateLimits.primary), "session");
-    addWindow(windows, parseWindow(rateLimits.secondary), "week");
+    addWindow(windows, parseWindow$1(rateLimits.primary), "session");
+    addWindow(windows, parseWindow$1(rateLimits.secondary), "week");
     return Object.keys(windows).length > 0 ? windows : undefined;
 }
 function addWindow(windows, window, fallbackName) {
@@ -10832,8 +10824,8 @@ function addWindow(windows, window, fallbackName) {
             : "session";
     windows[name] = window;
 }
-function parseWindow(value) {
-    if (!isRecord$5(value))
+function parseWindow$1(value) {
+    if (!isRecord$6(value))
         return undefined;
     const usedPercent = value.usedPercent ?? value.used_percent;
     if (!Number.isFinite(usedPercent))
@@ -10856,7 +10848,7 @@ function parseReset(value) {
     }
     return {};
 }
-function isRecord$5(value) {
+function isRecord$6(value) {
     return typeof value === "object" && value !== null;
 }
 
@@ -11140,7 +11132,7 @@ class ChildGrokAcpTransport {
             this.retire("invalid-response");
             return;
         }
-        if (!isRecord$4(value) || value.jsonrpc !== "2.0") {
+        if (!isRecord$5(value) || value.jsonrpc !== "2.0") {
             this.retire("invalid-response");
             return;
         }
@@ -11176,7 +11168,7 @@ class ChildGrokAcpTransport {
         this.pending.clear();
     }
 }
-function isRecord$4(value) {
+function isRecord$5(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -11316,13 +11308,13 @@ function createLifecycle() {
     return { sequence: 0, queue: Promise.resolve() };
 }
 function parseGrokBilling(value) {
-    if (!isRecord$3(value))
+    if (!isRecord$4(value))
         return undefined;
-    const payload = isRecord$3(value.result) ? value.result : value;
-    const config = isRecord$3(payload.config) ? payload.config : payload;
+    const payload = isRecord$4(value.result) ? value.result : value;
+    const config = isRecord$4(payload.config) ? payload.config : payload;
     let usedPercent;
     if (config.onDemandUsed !== undefined || config.onDemandCap !== undefined) {
-        if (!isRecord$3(config.onDemandUsed) || !isRecord$3(config.onDemandCap))
+        if (!isRecord$4(config.onDemandUsed) || !isRecord$4(config.onDemandCap))
             return undefined;
         const used = config.onDemandUsed.val;
         const cap = config.onDemandCap.val;
@@ -11346,13 +11338,13 @@ function parseGrokBilling(value) {
     }
     if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100)
         return undefined;
-    const period = isRecord$3(config.currentPeriod) ? config.currentPeriod : undefined;
+    const period = isRecord$4(config.currentPeriod) ? config.currentPeriod : undefined;
     const resetsAt = period?.end ?? config.resetsAt ?? config.resets_at;
     if (resetsAt !== undefined && (typeof resetsAt !== "string" || Number.isNaN(Date.parse(resetsAt))))
         return undefined;
     return { usedPercent, ...(typeof resetsAt === "string" ? { resetsAt } : {}) };
 }
-function isRecord$3(value) {
+function isRecord$4(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -11414,6 +11406,7 @@ let GrokUsage = (() => {
 })();
 
 const NAN_KEYCHAIN_TIMEOUT_MS = 2_000;
+const NAN_KEYCHAIN_IMPORT_TIMEOUT_MS = 30_000;
 const NAN_KEYCHAIN_MAX_STDIN_BYTES = 8 * 1024;
 const NAN_KEYCHAIN_MAX_STDOUT_BYTES = 8 * 1024;
 function resolveNanKeychainHelperPath(moduleUrl) {
@@ -11435,10 +11428,13 @@ class NanKeychainClient {
     async deleteSessionCache() {
         await this.request({ operation: "delete" }, false, NAN_KEYCHAIN_TIMEOUT_MS);
     }
+    async getChromeSafeStorage() {
+        return this.request({ operation: "getChromeSafeStorage" }, true, NAN_KEYCHAIN_IMPORT_TIMEOUT_MS);
+    }
     async request(payload, expectsSecret, timeoutMs) {
         const stdin = `${JSON.stringify(payload)}\n`;
         if (Buffer.byteLength(stdin, "utf8") > NAN_KEYCHAIN_MAX_STDIN_BYTES)
-            throw unavailable$2();
+            throw unavailable();
         let result;
         try {
             result = await this.run({
@@ -11450,23 +11446,23 @@ class NanKeychainClient {
             });
         }
         catch {
-            throw unavailable$2();
+            throw unavailable();
         }
         if (result.exitCode !== 0 || Buffer.byteLength(result.stdout, "utf8") > NAN_KEYCHAIN_MAX_STDOUT_BYTES)
-            throw unavailable$2();
+            throw unavailable();
         let response;
         try {
             response = JSON.parse(result.stdout);
         }
         catch {
-            throw unavailable$2();
+            throw unavailable();
         }
-        if (!isRecord$2(response) || response.ok !== true)
-            throw unavailable$2();
+        if (!isRecord$3(response) || response.ok !== true)
+            throw unavailable();
         if (!expectsSecret)
             return;
         if (typeof response.secret !== "string" && response.secret !== null)
-            throw unavailable$2();
+            throw unavailable();
         return response.secret;
     }
 }
@@ -11490,7 +11486,7 @@ function runNanKeychain(request) {
         };
         const fail = () => finish(() => {
             child.kill("SIGKILL");
-            reject(unavailable$2());
+            reject(unavailable());
         });
         const timeout = setTimeout(fail, request.timeoutMs);
         child.once("error", fail);
@@ -11505,108 +11501,337 @@ function runNanKeychain(request) {
         child.stdin.end(request.stdin, "utf8");
     });
 }
-function unavailable$2() {
+function unavailable() {
     return new Error("Keychain helper unavailable");
 }
-function isRecord$2(value) {
+function isRecord$3(value) {
     return typeof value === "object" && value !== null;
 }
 
-const MAX_API_KEY_BYTES = 256;
-/** Header-safe printable ASCII without whitespace, quotes, braces or backslashes, so the key can only ever be a bearer token. */
-function isValidNanApiKey(value) {
-    return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= MAX_API_KEY_BYTES
-        && /^[\x21\x23-\x5b\x5d-\x7a\x7c\x7e]+$/.test(value);
+const MAX_PROFILES = 8;
+const MAX_ROWS = 32;
+const MAX_BLOB_BYTES = 8 * 1024;
+const MAX_STRING_BYTES = 4 * 1024;
+const CHROME_EPOCH_MS = 11_644_473_600_000;
+/** Explicit-call-only Chrome importer. It never runs during construction or module loading. */
+class NanChromeCookieImporter {
+    homes;
+    getChromeSafeStorage;
+    now;
+    constructor(dependencies = {}) {
+        this.homes = dependencies.homes ?? [homedir()];
+        this.getChromeSafeStorage = dependencies.getChromeSafeStorage ?? (() => new NanKeychainClient().getChromeSafeStorage());
+        this.now = dependencies.now ?? (() => new Date());
+    }
+    /** Returns separate candidates per profile and cookie store; callers must validate one candidate without merging them. */
+    async importCandidates() {
+        const stores = [];
+        for (const home of this.homes) {
+            const root = await chromeRoot(home);
+            if (!root)
+                continue;
+            for (const profile of await profileDirectories(root)) {
+                for (const store of await readRelevantStores(profile)) {
+                    if (store.rows.length > 0 && !stores.some((existing) => identicalStore(existing, store)))
+                        stores.push(store);
+                }
+            }
+        }
+        const needsKey = stores.some(({ rows }) => rows.some((row) => !row.value));
+        let password = null;
+        if (needsKey) {
+            try {
+                password = await this.getChromeSafeStorage();
+            }
+            catch {
+                throw new NanChromeImportError("permission-or-keychain");
+            }
+            if (!password)
+                throw new NanChromeImportError("permission-or-keychain");
+        }
+        const candidates = [];
+        for (const { profile, store, rows } of stores) {
+            const cookies = decryptRows(rows, password, this.now());
+            if (cookies.length > 0)
+                candidates.push({ profileId: profile.name, store, cookies });
+        }
+        return candidates;
+    }
 }
-/**
- * Persists the personal NaN API key only in the macOS Keychain, through the bundled helper
- * (secret travels over stdin, never argv). The key is never logged, returned in errors, or
- * written to Stream Deck settings.
- */
-class NanApiKeyStore {
-    keychain;
-    constructor(keychain = new NanKeychainClient()) {
-        this.keychain = keychain;
-    }
-    /** undefined: nothing usable stored. Throws a generic error when the Keychain is unreachable. */
-    async read() {
-        let value;
-        try {
-            value = await this.keychain.getSessionCache();
-        }
-        catch {
-            throw unavailable$1();
-        }
-        // Entries left by the previous session-based release are JSON, never valid API keys.
-        return value !== null && isValidNanApiKey(value) ? value : undefined;
-    }
-    async write(key) {
-        if (!isValidNanApiKey(key))
-            throw new Error("Invalid NaN API key");
-        try {
-            await this.keychain.putSessionCache(key);
-        }
-        catch {
-            throw unavailable$1();
-        }
-    }
-    async clear() {
-        try {
-            await this.keychain.deleteSessionCache();
-        }
-        catch {
-            throw unavailable$1();
-        }
+class NanChromeImportError extends Error {
+    kind;
+    constructor(kind) {
+        super(kind === "unsupported-format" ? "Chrome cookie format unsupported" : "Chrome cookies unavailable");
+        this.kind = kind;
     }
 }
-function unavailable$1() {
-    return new Error("Keychain unavailable");
-}
-
-const NAN_USAGE_ORIGIN = "https://api.nan.builders";
-const NAN_QUOTA_ORIGIN = "https://cloud-api.nan.builders";
-const ALLOWED_ORIGINS = new Set([NAN_USAGE_ORIGIN, NAN_QUOTA_ORIGIN]);
-const TIMEOUT_MS = 5_000;
-const DEFAULT_RETRY_AFTER_MS = 60_000;
-const MAX_RETRY_AFTER_MS = 60 * 60_000;
-const systemClock = { setTimeout, clearTimeout };
-/**
- * Fixed-origin bearer transport. The key only ever travels in the Authorization header of a
- * request to an allow-listed NaN origin; redirects are never followed, responses are size-bounded
- * and no error carries request or response content.
- */
-async function getNanJson(options) {
-    const fetcher = options.fetcher ?? fetch;
-    const clock = options.clock ?? systemClock;
-    let origin;
+async function chromeRoot(home) {
+    const suppliedHome = resolve(home);
+    const homeStat = await lstatOrAbsent(suppliedHome);
+    if (!homeStat)
+        return null;
+    if (!homeStat.isDirectory())
+        throw new NanChromeImportError("unavailable");
+    let canonicalHome;
     try {
-        origin = new URL(options.url).origin;
+        canonicalHome = await realpath(suppliedHome);
+    }
+    catch (error) {
+        if (isNotFound(error))
+            return null;
+        throw new NanChromeImportError("unavailable");
+    }
+    return directoryUnder(canonicalHome, ["Library", "Application Support", "Google", "Chrome"]);
+}
+async function profileDirectories(root) {
+    let entries;
+    try {
+        entries = await readdir(root, { withFileTypes: true });
     }
     catch {
-        throw options.createError("transport");
+        throw new NanChromeImportError("unavailable");
     }
-    if (!ALLOWED_ORIGINS.has(origin) || !isValidNanApiKey(options.apiKey))
+    const names = entries
+        .filter((entry) => entry.isDirectory() && allowedProfileName(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    if (names.length > MAX_PROFILES)
+        throw new NanChromeImportError("unavailable");
+    const profiles = [];
+    for (const name of names) {
+        const path = await directoryUnder(root, [name]);
+        if (path)
+            profiles.push({ name, path });
+    }
+    return profiles;
+}
+function allowedProfileName(name) {
+    return name === "Default" || name.startsWith("Profile ") || name.startsWith("user-");
+}
+async function readRelevantStores(profile) {
+    const stores = [];
+    for (const store of ["Network", "Cookies"]) {
+        const path = store === "Network"
+            ? await fileUnder(profile.path, ["Network", "Cookies"])
+            : await fileUnder(profile.path, ["Cookies"]);
+        if (!path)
+            continue;
+        const rows = await readRelevantRows(path);
+        if (rows.length > 0)
+            stores.push({ profile, store, rows });
+    }
+    return stores;
+}
+async function directoryUnder(parent, parts) {
+    let path = parent;
+    for (const part of parts) {
+        path = join(path, part);
+        const stat = await lstatOrAbsent(path);
+        if (!stat)
+            return null;
+        if (stat.isSymbolicLink())
+            return null;
+        if (!stat.isDirectory())
+            throw new NanChromeImportError("unavailable");
+    }
+    return canonicalPath(parent, path);
+}
+async function fileUnder(parent, parts) {
+    const directories = parts.slice(0, -1);
+    const filename = parts.at(-1);
+    if (!filename)
+        return null;
+    const directory = await directoryUnder(parent, directories);
+    if (!directory)
+        return null;
+    const path = join(directory, filename);
+    const stat = await lstatOrAbsent(path);
+    if (!stat)
+        return null;
+    if (stat.isSymbolicLink())
+        return null;
+    if (!stat.isFile())
+        throw new NanChromeImportError("unavailable");
+    return canonicalPath(parent, path);
+}
+async function lstatOrAbsent(path) {
+    try {
+        return await lstat(path);
+    }
+    catch (error) {
+        if (isNotFound(error))
+            return null;
+        throw new NanChromeImportError("unavailable");
+    }
+}
+async function canonicalPath(parent, path) {
+    try {
+        const canonical = await realpath(path);
+        return inside(parent, canonical) ? canonical : null;
+    }
+    catch (error) {
+        if (isNotFound(error))
+            return null;
+        throw new NanChromeImportError("unavailable");
+    }
+}
+async function readRelevantRows(path) {
+    let db;
+    try {
+        db = new DatabaseSync(path, { readOnly: true });
+    }
+    catch {
+        throw new NanChromeImportError("unavailable");
+    }
+    try {
+        const versionRow = db.prepare("SELECT value FROM meta WHERE key = ?").get("version");
+        const version = parseVersion(versionRow?.value);
+        if (version === undefined)
+            throw new NanChromeImportError("unsupported-format");
+        const statement = db.prepare("SELECT host_key, name, path, expires_utc, is_secure, value, encrypted_value FROM cookies WHERE host_key IN (?, ?, ?, ?) LIMIT ?");
+        statement.setReadBigInts(true);
+        const rows = statement.all("cloud-api.nan.builders", ".cloud-api.nan.builders", "nan.builders", ".nan.builders", MAX_ROWS + 1);
+        if (rows.length > MAX_ROWS)
+            throw new NanChromeImportError("unavailable");
+        return rows.map((row) => rowFrom(row, version));
+    }
+    catch (error) {
+        if (error instanceof NanChromeImportError)
+            throw error;
+        throw new NanChromeImportError("unsupported-format");
+    }
+    finally {
+        try {
+            db.close();
+        }
+        catch { }
+    }
+}
+function rowFrom(row, version) {
+    const expires = typeof row.expires_utc === "bigint" ? row.expires_utc
+        : typeof row.expires_utc === "number" && Number.isSafeInteger(row.expires_utc) ? BigInt(row.expires_utc) : undefined;
+    const secure = typeof row.is_secure === "bigint" ? Number(row.is_secure) : row.is_secure;
+    if (typeof row.host_key !== "string" || typeof row.name !== "string" || typeof row.path !== "string" || typeof secure !== "number"
+        || typeof row.value !== "string" || expires === undefined || !(row.encrypted_value instanceof Uint8Array)
+        || !boundedString(row.host_key) || !boundedString(row.name) || !boundedString(row.path) || !boundedString(row.value)
+        || row.encrypted_value.byteLength > MAX_BLOB_BYTES)
+        throw new NanChromeImportError("unsupported-format");
+    return { host: row.host_key, name: row.name, path: row.path, expires, secure, value: row.value, encrypted: row.encrypted_value, version };
+}
+function decryptRows(rows, password, now) {
+    const encrypted = rows.some((row) => !row.value);
+    if (encrypted && !password)
+        return [];
+    const key = encrypted ? pbkdf2Sync(Buffer.from(password, "utf8"), "saltysalt", 1003, 16, "sha1") : null;
+    try {
+        return rows.flatMap((row) => cookieFrom(row, key, now));
+    }
+    finally {
+        key?.fill(0);
+    }
+}
+function cookieFrom(row, key, now) {
+    if (row.secure !== 1 || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(row.name) || !row.path.startsWith("/"))
+        return [];
+    const value = row.value || key && decrypt(row, key);
+    if (!value || !/^[!#$%&'()*+\-./0-9:<=>?@A-Z\[\]^_`a-z{|}~]*$/.test(value))
+        return [];
+    const expiresAt = chromeExpiry(row.expires, now);
+    if (expiresAt === "expired")
+        return [];
+    const hostOnly = !row.host.startsWith(".");
+    const domain = row.host.replace(/^\./, "").toLowerCase();
+    return [{ name: row.name, value, domain, hostOnly, path: row.path, secure: true, expiresAt }];
+}
+function decrypt(row, key) {
+    if (row.encrypted.byteLength < 4 || Buffer.from(row.encrypted.subarray(0, 3)).toString("ascii") !== "v10")
+        return null;
+    try {
+        const decipher = createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+        const plain = Buffer.concat([decipher.update(row.encrypted.subarray(3)), decipher.final()]);
+        const value = row.version >= 24 ? stripHostHash(plain, row.host) : plain;
+        return value ? new TextDecoder("utf-8", { fatal: true }).decode(value) : null;
+    }
+    catch {
+        return null;
+    }
+}
+function identicalStore(left, right) {
+    return left.profile.path === right.profile.path && left.rows.length === right.rows.length && left.rows.every((row, index) => identicalRow(row, right.rows[index]));
+}
+function identicalRow(left, right) {
+    return !!right && left.host === right.host && left.name === right.name && left.path === right.path
+        && left.expires === right.expires && left.secure === right.secure && left.value === right.value
+        && left.version === right.version && Buffer.from(left.encrypted).equals(Buffer.from(right.encrypted));
+}
+function parseVersion(value) {
+    if (typeof value === "string" && /^\d+$/.test(value))
+        value = Number(value);
+    if (typeof value === "bigint")
+        value = Number(value);
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+function stripHostHash(value, host) {
+    const digest = createHash("sha256").update(host).digest();
+    return value.subarray(0, 32).equals(digest) ? value.subarray(32) : null;
+}
+function chromeExpiry(value, now) {
+    if (value === 0n)
+        return null;
+    const milliseconds = value / 1000n - BigInt(CHROME_EPOCH_MS);
+    const maxDateMilliseconds = 8640000000000000n;
+    const nowMilliseconds = now.valueOf();
+    if (!Number.isFinite(nowMilliseconds) || milliseconds < -maxDateMilliseconds || milliseconds > maxDateMilliseconds)
+        return "expired";
+    if (milliseconds <= BigInt(nowMilliseconds))
+        return "expired";
+    return new Date(Number(milliseconds)).toISOString();
+}
+function boundedString(value) {
+    return Buffer.byteLength(value, "utf8") <= MAX_STRING_BYTES;
+}
+function inside(parent, child) {
+    const result = relative(resolve(parent), resolve(child));
+    return result === "" || (!isAbsolute(result) && result !== ".." && !result.startsWith(`..${sep}`));
+}
+function isNotFound(error) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+const NAN_DASHBOARD_QUOTA_URL$1 = "https://cloud-api.nan.builders/api/usage/quota";
+const NAN_DASHBOARD_METRICS_URL$1 = "https://cloud-api.nan.builders/api/metrics/usage";
+const RESOURCE_URLS = {
+    quota: NAN_DASHBOARD_QUOTA_URL$1,
+    metrics: NAN_DASHBOARD_METRICS_URL$1,
+};
+const MAX_COOKIE_HEADER_BYTES = 4 * 1024;
+const TIMEOUT_MS = 5_000;
+const systemClock = { setTimeout, clearTimeout };
+/**
+ * Fixed-route dashboard transport. It intentionally has no arbitrary endpoint API:
+ * quota and metrics are the only resources whose supplied Cookie header it sends.
+ */
+async function getNanDashboardJson(options) {
+    const fetcher = options.fetcher ?? fetch;
+    const clock = options.clock ?? systemClock;
+    if (!isSafeCookieHeader(options.cookieHeader))
         throw options.createError("transport");
     const controller = new AbortController();
     const timer = clock.setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-        const response = await abortable(fetcher(options.url, {
+        const response = await abortable(fetcher(RESOURCE_URLS[options.resource], {
             method: "GET",
-            headers: { authorization: `Bearer ${options.apiKey}`, accept: "application/json" },
+            headers: { cookie: options.cookieHeader },
             redirect: "manual",
             cache: "no-store",
             signal: controller.signal,
         }), controller.signal, options.createError);
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401 || response.status === 403 || response.redirected
+            || response.status >= 300 && response.status < 400) {
             safeCancel(response.body);
             throw options.createError("auth-rejected");
         }
-        if (response.status === 429) {
-            safeCancel(response.body);
-            throw options.createError("rate-limited", parseRetryAfter(response.headers.get("retry-after")));
-        }
-        // Redirects (including opaque ones) are refused so the key cannot be replayed elsewhere.
-        if (!response.ok || response.redirected || response.type === "opaqueredirect" || response.status >= 300) {
+        if (!response.ok) {
             safeCancel(response.body);
             throw options.createError("transport");
         }
@@ -11620,12 +11845,6 @@ async function getNanJson(options) {
     finally {
         clock.clearTimeout(timer);
     }
-}
-function parseRetryAfter(value) {
-    const seconds = value === null ? NaN : Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0)
-        return DEFAULT_RETRY_AFTER_MS;
-    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
 }
 async function readJson(response, signal, maxResponseBytes, createError) {
     const length = Number(response.headers.get("content-length"));
@@ -11684,86 +11903,93 @@ function abortable(promise, signal, createError) {
 function safeCancel(body) {
     void body?.cancel().catch(() => undefined);
 }
+function isSafeCookieHeader(value) {
+    return typeof value === "string" && value.length > 0
+        && Buffer.byteLength(value, "utf8") <= MAX_COOKIE_HEADER_BYTES
+        && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
 
-const NAN_API_USAGE_URL = `${NAN_USAGE_ORIGIN}/v1/usage`;
-const MAX_RESPONSE_BYTES$2 = 256 * 1024;
-class NanApiUsageError extends Error {
+const NAN_DASHBOARD_METRICS_URL = NAN_DASHBOARD_METRICS_URL$1;
+const MAX_RESPONSE_BYTES$1 = 256 * 1024;
+class NanDashboardMetricsError extends Error {
     kind;
-    retryAfterMs;
-    constructor(kind, retryAfterMs) {
-        super(kind === "auth-rejected" ? "NaN API rejected the key"
-            : kind === "rate-limited" ? "NaN API rate limit reached"
-                : kind === "schema" ? "NaN API usage response invalid" : "NaN API unavailable");
-        this.name = "NanApiUsageError";
+    constructor(kind) {
+        super(kind === "auth-rejected"
+            ? "NaN dashboard session rejected"
+            : kind === "schema" ? "NaN dashboard metrics response invalid" : "NaN dashboard unavailable");
         this.kind = kind;
-        if (retryAfterMs !== undefined)
-            this.retryAfterMs = retryAfterMs;
     }
 }
-class NanApiUsageClient {
+class NanDashboardMetricsClient {
     fetcher;
     clock;
-    now;
-    constructor(fetcher = fetch, clock, now = () => new Date()) {
+    /**
+     * This client neither acquires nor persists credentials. Callers must rebuild a
+     * Cookie header scoped to /api/metrics/usage; quota-path cookies are not reusable.
+     */
+    constructor(fetcher = fetch, clock = { setTimeout, clearTimeout }) {
         this.fetcher = fetcher;
         this.clock = clock;
-        this.now = now;
     }
-    /** One request per call: `totals.by_model` covers the whole window and `all_time` is always present. */
-    async getUsage(apiKey) {
-        const today = this.now().toISOString().slice(0, 10);
-        const query = new URLSearchParams({ start_date: `${today.slice(0, 7)}-01`, end_date: today, limit: "1" });
-        const value = await getNanJson({
-            url: `${NAN_API_USAGE_URL}?${query}`,
-            apiKey,
+    async getMetrics(cookieHeader) {
+        const value = await getNanDashboardJson({
+            resource: "metrics",
+            cookieHeader,
             fetcher: this.fetcher,
             clock: this.clock,
-            maxResponseBytes: MAX_RESPONSE_BYTES$2,
-            createError: (kind, retryAfterMs) => new NanApiUsageError(kind, retryAfterMs),
-            isExpectedError: (error) => error instanceof NanApiUsageError,
+            maxResponseBytes: MAX_RESPONSE_BYTES$1,
+            createError: (kind) => new NanDashboardMetricsError(kind),
+            isExpectedError: (error) => error instanceof NanDashboardMetricsError,
         });
-        return parseNanApiUsage(value);
+        return parseNanDashboardMetrics(value);
     }
 }
-function parseNanApiUsage(value) {
-    if (!isRecord$1(value) || value.object !== "usage.report" || !isRecord$1(value.totals) || !isRecord$1(value.all_time)) {
-        throw new NanApiUsageError("schema");
-    }
-    const { totals, all_time: allTime } = value;
-    if (!isCounter$1(totals.total_tokens) || !Array.isArray(totals.by_model) || !isCounter$1(allTime.total_tokens)) {
-        throw new NanApiUsageError("schema");
+function parseNanDashboardMetrics(value) {
+    if (!isRecord$2(value))
+        throw new NanDashboardMetricsError("schema");
+    const last24h = parseWindow(value.last24h);
+    const last30d = parseWindow(value.last30d);
+    const monthToDate = parseWindow(value.monthToDate);
+    const allTime = parseAllTimeWindow(value.allTime);
+    return Object.freeze({ last24h, last30d, monthToDate, allTime });
+}
+function parseAllTimeWindow(value) {
+    if (!isRecord$2(value))
+        throw new NanDashboardMetricsError("schema");
+    const window = parseWindow(value, true);
+    if (value.cachedAt === undefined)
+        return window;
+    if (typeof value.cachedAt !== "string" || !isIsoTimestamp$1(value.cachedAt))
+        throw new NanDashboardMetricsError("schema");
+    return Object.freeze({ ...window, cachedAt: value.cachedAt });
+}
+function parseWindow(value, allowCachedAt = false) {
+    if (!isRecord$2(value) || !isCounter$1(value.totalTokens) || !Array.isArray(value.byModel) || (!allowCachedAt && value.cachedAt !== undefined)) {
+        throw new NanDashboardMetricsError("schema");
     }
     const names = new Set();
     const byModel = [];
-    for (const entry of totals.by_model) {
-        if (!isRecord$1(entry) || !isModelName$2(entry.model) || names.has(entry.model)
-            || !isCounter$1(entry.prompt_tokens) || !isCounter$1(entry.completion_tokens) || !isCounter$1(entry.total_tokens)) {
-            throw new NanApiUsageError("schema");
+    for (const entry of value.byModel) {
+        if (!isRecord$2(entry) || !isModelName$1(entry.model) || !isCounter$1(entry.inputTokens) || !isCounter$1(entry.outputTokens)) {
+            throw new NanDashboardMetricsError("schema");
+        }
+        if (names.has(entry.model) || entry.inputTokens > Number.MAX_SAFE_INTEGER - entry.outputTokens) {
+            throw new NanDashboardMetricsError("schema");
         }
         names.add(entry.model);
         byModel.push(Object.freeze({
             model: entry.model,
-            inputTokens: entry.prompt_tokens,
-            outputTokens: entry.completion_tokens,
-            totalTokens: entry.total_tokens,
+            inputTokens: entry.inputTokens,
+            outputTokens: entry.outputTokens,
+            totalTokens: entry.inputTokens + entry.outputTokens,
         }));
     }
-    if (allTime.cached_at !== undefined && (typeof allTime.cached_at !== "string" || !isIsoTimestamp$1(allTime.cached_at))) {
-        throw new NanApiUsageError("schema");
-    }
-    return Object.freeze({
-        monthToDate: Object.freeze({ totalTokens: totals.total_tokens, byModel: Object.freeze(byModel) }),
-        allTime: Object.freeze({
-            totalTokens: allTime.total_tokens,
-            byModel: Object.freeze([]),
-            ...(allTime.cached_at === undefined ? {} : { cachedAt: allTime.cached_at }),
-        }),
-    });
+    return Object.freeze({ totalTokens: value.totalTokens, byModel: Object.freeze(byModel) });
 }
-function isRecord$1(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord$2(value) {
+    return typeof value === "object" && value !== null;
 }
-function isModelName$2(value) {
+function isModelName$1(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 128
         && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
@@ -11771,159 +11997,81 @@ function isCounter$1(value) {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 function isIsoTimestamp$1(value) {
-    return /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(new Date(value).valueOf());
+    return /^\d{4}-\d{2}-\d{2}T/.test(value) && calendarDate$1(value) !== null && !Number.isNaN(new Date(value).valueOf());
+}
+function calendarDate$1(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    if (!match)
+        return null;
+    const [year, month, day] = match.slice(1).map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : null;
 }
 
-/** Documented OpenAI-compatible catalog: the source of truth for what the key can call. */
-const NAN_API_MODELS_URL = `${NAN_USAGE_ORIGIN}/v1/models`;
-const MAX_RESPONSE_BYTES$1 = 256 * 1024;
-const MAX_MODELS = 512;
-class NanModelsError extends Error {
-    kind;
-    retryAfterMs;
-    constructor(kind, retryAfterMs) {
-        super(kind === "auth-rejected" ? "NaN API rejected the key"
-            : kind === "rate-limited" ? "NaN API rate limit reached"
-                : kind === "schema" ? "NaN models response invalid" : "NaN API unavailable");
-        this.name = "NanModelsError";
-        this.kind = kind;
-        if (retryAfterMs !== undefined)
-            this.retryAfterMs = retryAfterMs;
-    }
-}
-class NanModelsClient {
-    fetcher;
-    clock;
-    constructor(fetcher = fetch, clock) {
-        this.fetcher = fetcher;
-        this.clock = clock;
-    }
-    /** Returns the unique model ids in the order the API lists them. */
-    async getModels(apiKey) {
-        const value = await getNanJson({
-            url: NAN_API_MODELS_URL,
-            apiKey,
-            fetcher: this.fetcher,
-            clock: this.clock,
-            maxResponseBytes: MAX_RESPONSE_BYTES$1,
-            createError: (kind, retryAfterMs) => new NanModelsError(kind, retryAfterMs),
-            isExpectedError: (error) => error instanceof NanModelsError,
-        });
-        return parseNanModels(value);
-    }
-}
-function parseNanModels(value) {
-    if (typeof value !== "object" || value === null || value.object !== "list")
-        throw new NanModelsError("schema");
-    const data = value.data;
-    if (!Array.isArray(data) || data.length > MAX_MODELS)
-        throw new NanModelsError("schema");
-    const ids = new Set();
-    for (const entry of data) {
-        const id = typeof entry === "object" && entry !== null ? entry.id : undefined;
-        if (!isModelName$1(id))
-            throw new NanModelsError("schema");
-        ids.add(id);
-    }
-    return Object.freeze([...ids]);
-}
-function isModelName$1(value) {
-    return typeof value === "string" && value.length > 0 && value.length <= 128
-        && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
-}
-
-/** Undocumented dashboard backend; reached with a fixed origin, no redirects and strict validation. */
-const NAN_API_QUOTA_URL = `${NAN_QUOTA_ORIGIN}/api/usage/quota`;
+const NAN_DASHBOARD_QUOTA_URL = NAN_DASHBOARD_QUOTA_URL$1;
 const MAX_RESPONSE_BYTES = 64 * 1024;
-// The dashboard's own fallbacks for a model that reports rolling usage without naming its budget.
-const DEFAULT_WINDOW_TOKENS = 400_000_000;
-const DEFAULT_WINDOW_HOURS = 4;
-class NanQuotaError extends Error {
+class NanDashboardQuotaError extends Error {
     kind;
     constructor(kind) {
-        super(kind === "auth-rejected" ? "NaN quota rejected the key"
-            : kind === "schema" ? "NaN quota response invalid" : "NaN quota unavailable");
-        this.name = "NanQuotaError";
+        super(kind === "auth-rejected"
+            ? "NaN dashboard session rejected"
+            : kind === "schema" ? "NaN dashboard quota response invalid" : "NaN dashboard unavailable");
         this.kind = kind;
     }
 }
-class NanQuotaClient {
+class NanDashboardQuotaClient {
     fetcher;
     clock;
-    constructor(fetcher = fetch, clock) {
+    constructor(fetcher = fetch, clock = { setTimeout, clearTimeout }) {
         this.fetcher = fetcher;
         this.clock = clock;
     }
-    async getQuota(apiKey) {
-        const value = await getNanJson({
-            url: NAN_API_QUOTA_URL,
-            apiKey,
+    async getQuota(cookieHeader) {
+        const value = await getNanDashboardJson({
+            resource: "quota",
+            cookieHeader,
             fetcher: this.fetcher,
             clock: this.clock,
             maxResponseBytes: MAX_RESPONSE_BYTES,
-            createError: (kind) => new NanQuotaError(kind),
-            isExpectedError: (error) => error instanceof NanQuotaError,
+            createError: (kind) => new NanDashboardQuotaError(kind),
+            isExpectedError: (error) => error instanceof NanDashboardQuotaError,
         });
-        return parseNanQuota(value);
+        return parseNanDashboardQuota(value);
     }
 }
-function parseNanQuota(value) {
-    if (!isRecord(value) || !Array.isArray(value.models) || (value.periodStart !== undefined && !isDateOnly(value.periodStart))) {
-        throw new NanQuotaError("schema");
+function parseNanDashboardQuota(value) {
+    if (!isRecord$1(value) || !isDateOnly(value.periodStart) || !Array.isArray(value.models)) {
+        throw new NanDashboardQuotaError("schema");
     }
-    const fallbackReset = optionalDate(value.periodEnd);
     const names = new Set();
     const models = [];
     const uncappedModels = [];
     for (const entry of value.models) {
-        if (!isRecord(entry) || !isModelName(entry.model) || names.has(entry.model))
-            throw new NanQuotaError("schema");
-        names.add(entry.model);
-        for (const field of [entry.cap, entry.fullCap]) {
-            if (field !== undefined && field !== null && !isCounter(field))
-                throw new NanQuotaError("schema");
+        if (!isRecord$1(entry) || !isModelName(entry.model) || !isCounter(entry.cap) || !isCounter(entry.tokensUsed)) {
+            throw new NanDashboardQuotaError("schema");
         }
-        // The dashboard divides by the full-period cap: `cap` alone is prorated on a first period.
-        const allowance = positive(entry.fullCap) ?? positive(entry.cap);
-        if (allowance === undefined && entry.cap !== 0)
-            continue; // no allowance reported: not drift, nothing to show
-        if (!isCounter(entry.tokensUsed))
-            throw new NanQuotaError("schema");
-        const resetAt = optionalDate(entry.periodEnd) ?? fallbackReset;
-        const windowHours = optionalWindowHours(entry.windowHours);
-        if (allowance === undefined) {
+        if (names.has(entry.model))
+            throw new NanDashboardQuotaError("schema");
+        names.add(entry.model);
+        const resetAt = optionalDate(entry.periodEnd);
+        const windowHours = optionalWindow(entry.windowHours);
+        if (entry.cap === 0) {
             uncappedModels.push({ model: entry.model, tokensUsed: entry.tokensUsed, resetAt, windowHours });
             continue;
         }
-        const rolling = parseRolling(entry, windowHours);
         models.push({
             model: entry.model,
-            cap: allowance,
+            cap: entry.cap,
             tokensUsed: entry.tokensUsed,
-            percentage: entry.tokensUsed / allowance * 100,
+            percentage: entry.tokensUsed / entry.cap * 100,
             resetAt,
             windowHours,
-            ...(rolling ? { rolling } : {}),
         });
     }
     return { eligibility: "unknown", models, uncappedModels };
 }
-function parseRolling(entry, windowHours) {
-    if (entry.windowTokensUsed === undefined || entry.windowTokensUsed === null)
-        return undefined;
-    if (!isCounter(entry.windowTokensUsed))
-        throw new NanQuotaError("schema");
-    const budget = positive(entry.fullWindowTokens) ?? positive(entry.windowTokens) ?? DEFAULT_WINDOW_TOKENS;
-    return {
-        tokensUsed: entry.windowTokensUsed,
-        budget,
-        percentage: entry.windowTokensUsed / budget * 100,
-        resetAt: optionalDate(entry.windowResetsAt),
-        windowHours: windowHours ?? DEFAULT_WINDOW_HOURS,
-    };
-}
-function isRecord(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord$1(value) {
+    return typeof value === "object" && value !== null;
 }
 function isModelName(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 128
@@ -11932,25 +12080,22 @@ function isModelName(value) {
 function isCounter(value) {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
-function positive(value) {
-    return isCounter(value) && value > 0 ? value : undefined;
-}
 function optionalDate(value) {
-    if (value === undefined || value === null)
+    if (value == null)
         return null;
     if (typeof value !== "string" || !isIsoTimestamp(value))
-        throw new NanQuotaError("schema");
+        throw new NanDashboardQuotaError("schema");
     return value;
 }
-function optionalWindowHours(value) {
-    if (value === undefined || value === null)
+function optionalWindow(value) {
+    if (value == null)
         return null;
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
-        throw new NanQuotaError("schema");
+        throw new NanDashboardQuotaError("schema");
     return value;
 }
 function isDateOnly(value) {
-    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && calendarDate(value) !== null;
+    return typeof value === "string" && calendarDate(value) !== null && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 function isIsoTimestamp(value) {
     return /^\d{4}-\d{2}-\d{2}T/.test(value) && calendarDate(value) !== null && !Number.isNaN(new Date(value).valueOf());
@@ -11964,54 +12109,240 @@ function calendarDate(value) {
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : null;
 }
 
-/** Coordinates shared reads of the NaN usage and quota APIs using the user's stored API key. */
-class NanDashboardController {
-    lastQuota;
-    lastMetrics;
-    lastCatalog;
-    catalogCheckedAt = Number.NEGATIVE_INFINITY;
-    lastMetricsError;
-    lastError;
-    usageBackoffUntil = 0;
-    loaded = false;
-    readInFlight;
-    epoch = 0;
-    listeners = new Set();
-    watchers = new Set();
-    watchTimer;
-    keys;
-    usage;
+const VERSION = 1;
+const SCOPE = "nan-dashboard-session";
+const MAX_BYTES = 4 * 1024;
+const MAX_COOKIES = 32;
+const quotaUrl = new URL(NAN_DASHBOARD_QUOTA_URL);
+const metricsUrl = new URL(NAN_DASHBOARD_METRICS_URL);
+/** A shared instance serializes cache writes and auth-driven eviction. */
+class NanDashboardSessionStore {
+    pending = Promise.resolve();
+    keychain;
     quota;
-    models;
-    scheduler;
+    metrics;
     now;
-    constructor(options = {}) {
-        this.keys = options.keys ?? new NanApiKeyStore();
-        this.usage = options.usage ?? new NanApiUsageClient();
-        this.quota = options.quota ?? new NanQuotaClient();
-        this.models = options.models ?? new NanModelsClient();
-        this.scheduler = options.scheduler ?? defaultWatchScheduler;
-        this.now = options.now ?? Date.now;
+    constructor(keychain = new NanKeychainClient(), quota = new NanDashboardQuotaClient(), now = () => new Date(), metrics = new NanDashboardMetricsClient()) {
+        this.keychain = keychain;
+        this.quota = quota;
+        this.metrics = metrics;
+        this.now = now;
     }
-    isDashboardWatched() { return this.watchers.size > 0; }
-    /** Leases the one shared poll for visible aggregate keypad actions. */
+    /** Validates a canonical explicit candidate before persisting it to Keychain. */
+    validateAndStore(cookies) {
+        return this.serial(async () => {
+            let candidate;
+            try {
+                candidate = canonicalSession(cookies, this.now());
+            }
+            catch {
+                return { state: "needs-import" };
+            }
+            const secret = JSON.stringify({ version: VERSION, scope: SCOPE, cookies: candidate.cookies });
+            if (Buffer.byteLength(secret, "utf8") > MAX_BYTES)
+                return { state: "needs-import" };
+            try {
+                const quota = await this.quota.getQuota(candidate.quotaHeader);
+                try {
+                    await this.keychain.putSessionCache(secret);
+                }
+                catch {
+                    return { state: "keychain-unavailable" };
+                }
+                return { state: "ready", quota };
+            }
+            catch (error) {
+                if (error instanceof NanDashboardQuotaError && error.kind === "transport")
+                    return { state: "transient" };
+                if (error instanceof NanDashboardQuotaError && error.kind === "schema")
+                    return { state: "schema-invalid" };
+                return { state: "needs-import" };
+            }
+        });
+    }
+    /** Reads only the cache and never invokes browser acquisition. */
+    getCachedQuota() {
+        return this.serial(async () => {
+            const candidate = await this.readCachedSession();
+            if ("state" in candidate)
+                return candidate;
+            try {
+                return { state: "ready", quota: await this.quota.getQuota(candidate.quotaHeader) };
+            }
+            catch (error) {
+                return this.quotaFailure(error);
+            }
+        });
+    }
+    /** Reads quota and metrics once from the same cached session without credential acquisition. */
+    getCachedDashboard() {
+        return this.serial(async () => {
+            const candidate = await this.readCachedSession();
+            if ("state" in candidate)
+                return candidate;
+            let quota;
+            try {
+                quota = await this.quota.getQuota(candidate.quotaHeader);
+            }
+            catch (error) {
+                return this.quotaFailure(error);
+            }
+            // A cache created before metrics-only cookies existed remains usable for quota.
+            if (!candidate.metricsHeader)
+                return { state: "ready", quota, metricsError: "unavailable" };
+            try {
+                return { state: "ready", quota, metrics: await this.metrics.getMetrics(candidate.metricsHeader) };
+            }
+            catch (error) {
+                return { state: "ready", quota, metricsError: metricsFailure(error) };
+            }
+        });
+    }
+    async readCachedSession() {
+        let encoded;
+        try {
+            encoded = await this.keychain.getSessionCache();
+        }
+        catch {
+            return { state: "keychain-unavailable" };
+        }
+        if (!encoded)
+            return { state: "needs-import" };
+        try {
+            return canonicalSession(decodeSession(encoded), this.now());
+        }
+        catch {
+            return this.evict();
+        }
+    }
+    quotaFailure(error) {
+        if (error instanceof NanDashboardQuotaError && error.kind === "auth-rejected")
+            return this.evict();
+        if (error instanceof NanDashboardQuotaError && error.kind === "schema")
+            return { state: "schema-invalid" };
+        return { state: "transient" };
+    }
+    async evict() {
+        try {
+            await this.keychain.deleteSessionCache();
+            return { state: "needs-import" };
+        }
+        catch {
+            return { state: "eviction-failed" };
+        }
+    }
+    serial(operation) {
+        const next = this.pending.catch(() => undefined).then(operation);
+        this.pending = next.then(() => undefined, () => undefined);
+        return next;
+    }
+}
+function canonicalSession(records, now) {
+    const cookies = canonicalCookies(records, now).filter((cookie) => matchesTarget(cookie, quotaUrl) || matchesTarget(cookie, metricsUrl));
+    const quotaHeader = buildHeader(cookies, quotaUrl);
+    if (!quotaHeader)
+        throw new Error("invalid session");
+    return { cookies, quotaHeader, metricsHeader: buildHeader(cookies, metricsUrl) };
+}
+function canonicalCookies(records, now) {
+    if (!Number.isFinite(now.valueOf()) || records.length === 0 || records.length > MAX_COOKIES)
+        throw new Error("invalid session");
+    const identities = new Set();
+    return records.flatMap((record) => {
+        const cookie = canonicalCookie(record);
+        const identity = `${cookie.name}\n${cookie.domain}\n${cookie.path}\n${cookie.hostOnly}`;
+        if (identities.has(identity))
+            throw new Error("ambiguous session");
+        identities.add(identity);
+        return isExpired(cookie, now) ? [] : [cookie];
+    }).sort((a, b) => b.path.length - a.path.length || a.name.localeCompare(b.name));
+}
+function buildHeader(cookies, target) {
+    const header = cookies.filter((cookie) => matchesTarget(cookie, target)).map(({ name, value }) => `${name}=${value}`).join("; ");
+    if (Buffer.byteLength(header, "utf8") > MAX_BYTES)
+        throw new Error("invalid session");
+    return header;
+}
+function decodeSession(encoded) {
+    if (Buffer.byteLength(encoded, "utf8") > MAX_BYTES)
+        throw new Error("invalid session");
+    const value = JSON.parse(encoded);
+    if (!isRecord(value) || value.version !== VERSION || value.scope !== SCOPE || !Array.isArray(value.cookies))
+        throw new Error("invalid session");
+    return value.cookies;
+}
+function canonicalCookie(value) {
+    if (!isRecord(value) || !isToken(value.name) || typeof value.value !== "string" || !isCookieValue(value.value)
+        || typeof value.domain !== "string" || typeof value.hostOnly !== "boolean" || typeof value.path !== "string"
+        || !value.path.startsWith("/") || value.secure !== true || !validExpiry(value.expiresAt))
+        throw new Error("invalid session");
+    const domain = value.domain.toLowerCase();
+    const normalized = value.hostOnly ? domain : domain.replace(/^\./, "");
+    if (!normalized || containsControl(normalized))
+        throw new Error("invalid session");
+    return { name: value.name, value: value.value, domain: normalized, hostOnly: value.hostOnly, path: value.path, secure: true, expiresAt: value.expiresAt };
+}
+function matchesTarget(cookie, target) {
+    return matchesHost(cookie, target) && matchesPath(cookie.path, target.pathname);
+}
+function matchesHost(cookie, target) {
+    return cookie.hostOnly ? cookie.domain === target.hostname : cookie.domain === "nan.builders" || cookie.domain === target.hostname;
+}
+function matchesPath(path, target) { return target.startsWith(path) && (path.endsWith("/") || target.length === path.length || target[path.length] === "/"); }
+function isExpired(cookie, now) { return cookie.expiresAt !== null && new Date(cookie.expiresAt).valueOf() <= now.valueOf(); }
+function metricsFailure(error) {
+    if (error instanceof NanDashboardMetricsError && error.kind === "schema")
+        return "schema-invalid";
+    return error instanceof NanDashboardMetricsError && error.kind === "transport" ? "transient" : "unavailable";
+}
+function validExpiry(value) { return value === null || typeof value === "string" && isValidIso(value); }
+function isValidIso(value) { const m = /^(\d{4})-(\d{2})-(\d{2})T/.exec(value); if (!m || Number.isNaN(new Date(value).valueOf()))
+    return false; const [y, mo, d] = m.slice(1).map(Number), date = new Date(Date.UTC(y, mo - 1, d)); return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d; }
+function isToken(value) { return typeof value === "string" && /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value); }
+function isCookieValue(value) { return /^[!#$%&'()*+\-./0-9:<=>?@A-Z\[\]^_`a-z{|}~]*$/.test(value); }
+function containsControl(value) { return /[\u0000-\u001f\u007f-\u009f]/.test(value); }
+function isRecord(value) { return typeof value === "object" && value !== null; }
+
+/** Coordinates cached dashboard reads without acquiring Chrome data implicitly. */
+class NanDashboardController {
+    lastDashboardQuota;
+    lastDashboardMetrics;
+    lastMetricsError;
+    importInFlight;
+    dashboardReadInFlight;
+    dashboardCacheInvalidated = false;
+    dashboardEpoch = 0;
+    listeners = new Set();
+    dashboardWatchers = new Set();
+    dashboardWatchTimer;
+    sessions;
+    importer;
+    watchScheduler;
+    constructor(sessions = new NanDashboardSessionStore(), importer = new NanChromeCookieImporter(), watchScheduler = defaultWatchScheduler) {
+        this.sessions = sessions;
+        this.importer = importer;
+        this.watchScheduler = watchScheduler;
+    }
+    isImporting() { return this.importInFlight !== undefined; }
+    isDashboardWatched() { return this.dashboardWatchers.size > 0; }
+    /** Leases the one shared dashboard poll for visible aggregate keypad actions. */
     watchDashboard() {
         const watcher = Symbol("dashboard-watcher");
-        this.watchers.add(watcher);
-        if (this.watchers.size === 1) {
+        this.dashboardWatchers.add(watcher);
+        if (this.dashboardWatchers.size === 1) {
             void this.getUsage({ source: "dashboard" });
-            this.watchTimer = this.scheduler.setInterval(() => void this.getUsage({ source: "dashboard" }), 30_000);
+            this.dashboardWatchTimer = this.watchScheduler.setInterval(() => void this.getUsage({ source: "dashboard" }), 30_000);
         }
         let disposed = false;
         return () => {
             if (disposed)
                 return;
             disposed = true;
-            this.watchers.delete(watcher);
-            if (this.watchers.size !== 0 || !this.watchTimer)
+            this.dashboardWatchers.delete(watcher);
+            if (this.dashboardWatchers.size !== 0 || !this.dashboardWatchTimer)
                 return;
-            this.scheduler.clearInterval(this.watchTimer);
-            this.watchTimer = undefined;
+            this.watchScheduler.clearInterval(this.dashboardWatchTimer);
+            this.dashboardWatchTimer = undefined;
         };
     }
     /** Subscribes visible dashboard consumers to completed shared snapshot reads. */
@@ -12020,214 +12351,157 @@ class NanDashboardController {
         return () => this.listeners.delete(listener);
     }
     async getUsage(settings, options = {}) {
-        if (!isDashboardSource(settings.source))
+        if (settings.source !== undefined && settings.source !== "dashboard" && settings.source !== "legacy") {
             return { source: "dashboard", stale: false, error: "invalid-source" };
-        return options.cacheWhileWatched && this.isDashboardWatched() ? this.cachedUsage() : this.read();
+        }
+        return options.cacheWhileWatched && this.isDashboardWatched()
+            ? this.cachedDashboardUsage()
+            : this.getDashboardUsage();
     }
     getCachedUsage(settings) {
-        if (!isDashboardSource(settings.source))
+        if (settings.source !== undefined && settings.source !== "dashboard" && settings.source !== "legacy") {
             return { source: "dashboard", stale: false, error: "invalid-source" };
-        return this.cachedUsage();
+        }
+        return this.cachedDashboardUsage();
     }
-    /** Stores the key in the Keychain only; it is never cached, logged or returned. */
-    async saveApiKey(key) {
-        try {
-            await this.keys.write(key);
-        }
-        catch {
-            return "failed";
-        }
-        this.resetSnapshots();
-        void this.read().catch(() => undefined);
-        return "saved";
-    }
-    async clearApiKey() {
-        try {
-            await this.keys.clear();
-        }
-        catch {
-            return "failed";
-        }
-        this.resetSnapshots();
-        this.lastError = "needs-key";
-        this.loaded = true;
-        this.notify(this.cachedUsage());
-        return "cleared";
-    }
-    resetSnapshots() {
-        // A replacement key may belong to another account: drop both snapshots and ignore reads in flight.
-        this.epoch += 1;
-        this.lastQuota = undefined;
-        this.lastMetrics = undefined;
+    importChromeSession() {
+        if (this.importInFlight)
+            return Promise.resolve({ state: "import-busy" });
+        // A replacement account invalidates both endpoint snapshots before the importer runs.
+        this.dashboardEpoch += 1;
+        this.lastDashboardQuota = undefined;
+        this.lastDashboardMetrics = undefined;
         this.lastMetricsError = undefined;
-        this.lastCatalog = undefined;
-        this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
-        this.lastError = undefined;
-        this.usageBackoffUntil = 0;
-        this.readInFlight = undefined;
+        this.dashboardCacheInvalidated = true;
+        const request = this.importCandidates().then((result) => {
+            this.notify(result.state === "ready"
+                ? { source: "dashboard", quota: result.quota, stale: false, metricsStale: false }
+                : { source: "dashboard", stale: false, error: result.state });
+            return result;
+        }).finally(() => {
+            if (this.importInFlight === request)
+                this.importInFlight = undefined;
+        });
+        this.importInFlight = request;
+        return request;
     }
-    read() {
-        if (this.readInFlight)
-            return this.readInFlight;
-        const request = this.fetchUsage().then((usage) => {
+    getDashboardUsage() {
+        if (this.dashboardReadInFlight)
+            return this.dashboardReadInFlight;
+        const request = this.readDashboardUsage().then((usage) => {
             this.notify(usage);
             return usage;
         }).finally(() => {
-            if (this.readInFlight === request)
-                this.readInFlight = undefined;
+            if (this.dashboardReadInFlight === request)
+                this.dashboardReadInFlight = undefined;
         });
-        this.readInFlight = request;
+        this.dashboardReadInFlight = request;
         return request;
     }
-    async fetchUsage() {
-        const epoch = this.epoch;
-        let apiKey;
+    async readDashboardUsage() {
+        if (this.importInFlight)
+            return { source: "dashboard", stale: false, error: "import-busy" };
+        if (this.dashboardCacheInvalidated)
+            return { source: "dashboard", stale: false, error: "needs-import" };
+        const epoch = this.dashboardEpoch;
+        let result;
         try {
-            apiKey = await this.keys.read();
+            result = await this.sessions.getCachedDashboard();
         }
         catch {
-            if (epoch !== this.epoch)
-                return this.cachedUsage();
-            this.clearAll();
-            return this.finish("keychain-unavailable");
+            result = { state: "transient" };
         }
-        if (epoch !== this.epoch)
-            return this.cachedUsage();
-        if (!apiKey) {
-            this.clearAll();
-            return this.finish("needs-key");
-        }
-        const backingOff = this.now() < this.usageBackoffUntil;
-        const loadCatalog = this.now() - this.catalogCheckedAt >= CATALOG_REFRESH_MS;
-        if (loadCatalog)
-            this.catalogCheckedAt = this.now();
-        const [usage, quota, catalog] = await Promise.allSettled([
-            backingOff ? Promise.resolve(undefined) : this.usage.getUsage(apiKey),
-            this.quota.getQuota(apiKey),
-            loadCatalog ? this.models.getModels(apiKey) : Promise.resolve(undefined),
-        ]);
-        // A late result from the previous key must never repopulate either snapshot.
-        if (epoch !== this.epoch)
-            return this.cachedUsage();
-        const rejected = (usage.status === "rejected" && usage.reason instanceof NanApiUsageError && usage.reason.kind === "auth-rejected")
-            || (catalog.status === "rejected" && catalog.reason instanceof NanModelsError && catalog.reason.kind === "auth-rejected");
-        if (rejected) {
-            this.clearAll();
-            return this.finish("key-rejected");
-        }
-        if (usage.status === "fulfilled") {
-            if (usage.value) {
-                this.lastMetrics = usage.value;
+        // A late result from the prior account must not repopulate either endpoint snapshot.
+        if (epoch !== this.dashboardEpoch)
+            return { source: "dashboard", stale: false, error: "needs-import" };
+        if (result.state === "ready") {
+            this.lastDashboardQuota = result.quota;
+            if (result.metrics) {
+                this.lastDashboardMetrics = result.metrics;
                 this.lastMetricsError = undefined;
+                return { source: "dashboard", quota: result.quota, metrics: result.metrics, stale: false, metricsStale: false };
             }
+            this.lastMetricsError = result.metricsError;
+            return this.lastDashboardMetrics
+                ? { source: "dashboard", quota: result.quota, metrics: this.lastDashboardMetrics, stale: false, metricsStale: true, metricsError: result.metricsError }
+                : { source: "dashboard", quota: result.quota, stale: false, metricsStale: false, metricsError: result.metricsError };
         }
-        else {
-            const reason = usage.reason;
-            if (reason instanceof NanApiUsageError && reason.kind === "rate-limited") {
-                this.usageBackoffUntil = this.now() + (reason.retryAfterMs ?? 60_000);
-                this.lastMetricsError = "transient";
-            }
-            else {
-                this.lastMetricsError = reason instanceof NanApiUsageError && reason.kind === "schema" ? "schema-invalid" : "transient";
-            }
+        // Authentication/cache reset must never show the preceding account's snapshots.
+        if (result.state === "needs-import" || result.state === "eviction-failed") {
+            this.lastDashboardQuota = undefined;
+            this.lastDashboardMetrics = undefined;
+            this.lastMetricsError = undefined;
         }
-        if (backingOff)
-            this.lastMetricsError = "transient";
-        // The catalog changes rarely: keep the last good list and retry on the next hourly check.
-        if (catalog.status === "fulfilled" && catalog.value)
-            this.lastCatalog = catalog.value;
-        else if (catalog.status === "rejected")
-            this.catalogCheckedAt = this.now() - CATALOG_REFRESH_MS + CATALOG_RETRY_MS;
-        // The quota endpoint is undocumented: any failure hides only the quota.
-        this.lastQuota = quota.status === "fulfilled" ? quota.value : undefined;
-        this.lastError = undefined;
-        this.loaded = true;
-        return this.cachedUsage();
-    }
-    finish(error) {
-        this.lastError = error;
-        this.loaded = true;
-        return this.cachedUsage();
-    }
-    clearAll() {
-        this.lastCatalog = undefined;
-        this.catalogCheckedAt = Number.NEGATIVE_INFINITY;
-        this.lastQuota = undefined;
-        this.lastMetrics = undefined;
-        this.lastMetricsError = undefined;
+        return result.state === "transient" && this.lastDashboardQuota
+            ? { source: "dashboard", quota: this.lastDashboardQuota, metrics: this.lastDashboardMetrics, stale: true, metricsStale: this.lastDashboardMetrics !== undefined, error: "transient", metricsError: this.lastMetricsError }
+            : { source: "dashboard", stale: false, error: result.state };
     }
     notify(usage) {
         for (const listener of this.listeners)
             listener(usage);
     }
-    cachedUsage() {
-        if (this.lastError)
-            return { source: "dashboard", stale: false, error: this.lastError };
-        if (!this.loaded)
-            return { source: "dashboard", stale: false };
-        return {
-            source: "dashboard",
-            ...(this.lastQuota ? { quota: this.lastQuota } : {}),
-            ...(this.lastMetrics ? { metrics: this.lastMetrics } : {}),
-            ...(this.lastCatalog ? { catalog: this.lastCatalog } : {}),
-            stale: false,
-            ...(this.lastMetrics ? { metricsStale: this.lastMetricsError !== undefined } : {}),
-            ...(this.lastMetricsError ? { metricsError: this.lastMetricsError } : {}),
-        };
+    cachedDashboardUsage() {
+        if (this.importInFlight)
+            return { source: "dashboard", stale: false, error: "import-busy" };
+        if (this.dashboardCacheInvalidated)
+            return { source: "dashboard", stale: false, error: "needs-import" };
+        return this.lastDashboardQuota
+            ? { source: "dashboard", quota: this.lastDashboardQuota, metrics: this.lastDashboardMetrics, stale: false, metricsStale: this.lastDashboardMetrics !== undefined && this.lastMetricsError !== undefined, metricsError: this.lastMetricsError }
+            : { source: "dashboard", stale: false, error: "needs-import" };
     }
-}
-const CATALOG_REFRESH_MS = 60 * 60_000;
-const CATALOG_RETRY_MS = 5 * 60_000;
-function isDashboardSource(source) {
-    return source === undefined || source === "dashboard" || source === "legacy";
+    async importCandidates() {
+        let candidates;
+        try {
+            candidates = await this.importer.importCandidates();
+        }
+        catch (error) {
+            return { state: error instanceof NanChromeImportError ? "import-unavailable" : "import-unavailable" };
+        }
+        for (const candidate of candidates) {
+            let result;
+            try {
+                result = await this.sessions.validateAndStore(candidate.cookies);
+            }
+            catch {
+                return { state: "transient" };
+            }
+            if (result.state === "ready") {
+                this.lastDashboardQuota = result.quota;
+                this.dashboardCacheInvalidated = false;
+                return result;
+            }
+            // A rejected/invalid isolated candidate can try the next profile/store. The
+            // remaining typed errors are not candidate-specific and must not be retried.
+            if (result.state !== "needs-import")
+                return result;
+        }
+        return { state: "needs-import" };
+    }
 }
 const defaultWatchScheduler = {
     setInterval: (callback, milliseconds) => setInterval(callback, milliseconds),
     clearInterval: (timer) => clearInterval(timer),
 };
 
-const SAVE_API_KEY_KIND = "nan.saveApiKey.v1";
-const CLEAR_API_KEY_KIND = "nan.clearApiKey.v1";
-const API_KEY_RESULT_KIND = "nan.apiKey.result.v1";
+const IMPORT_CHROME_SESSION_KIND = "nan.importChromeSession.v1";
+const IMPORT_CHROME_SESSION_RESULT_KIND = "nan.importChromeSession.result.v1";
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
-/** Accepts only exact, correlated save/clear requests from the property inspector. */
-function parseApiKeyMessage(payload) {
-    if (typeof payload !== "object" || payload === null)
+/** Parses an explicit legacy request or an exact correlated request before Chrome acquisition. */
+function parseImportChromeSessionMessage(payload) {
+    if (typeof payload !== "object" || payload === null || payload.kind !== IMPORT_CHROME_SESSION_KIND)
         return undefined;
-    const { kind, requestId, apiKey } = payload;
-    if (typeof requestId !== "string" || !REQUEST_ID.test(requestId))
-        return undefined;
-    const keys = Object.keys(payload).length;
-    if (kind === SAVE_API_KEY_KIND && keys === 3 && typeof apiKey === "string")
-        return { kind, requestId, apiKey };
-    if (kind === CLEAR_API_KEY_KIND && keys === 2)
-        return { kind, requestId };
+    const keys = Object.keys(payload);
+    if (keys.length === 1)
+        return { kind: IMPORT_CHROME_SESSION_KIND };
+    const requestId = payload.requestId;
+    if (keys.length === 2 && typeof requestId === "string" && REQUEST_ID.test(requestId)) {
+        return { kind: IMPORT_CHROME_SESSION_KIND, requestId };
+    }
     return undefined;
 }
-function createApiKeyResult(requestId, outcome) {
-    return { kind: API_KEY_RESULT_KIND, requestId, outcome };
-}
-/** Returns the reply for the originating inspector, or undefined when the payload is not an API key request. */
-async function handleNanApiKeyMessage(payload, controller) {
-    const request = parseApiKeyMessage(payload);
-    if (!request)
-        return undefined;
-    if (request.kind === CLEAR_API_KEY_KIND) {
-        try {
-            return createApiKeyResult(request.requestId, await controller.clearApiKey());
-        }
-        catch {
-            return createApiKeyResult(request.requestId, "failed");
-        }
-    }
-    if (!isValidNanApiKey(request.apiKey))
-        return createApiKeyResult(request.requestId, "invalid");
-    try {
-        return createApiKeyResult(request.requestId, await controller.saveApiKey(request.apiKey));
-    }
-    catch {
-        return createApiKeyResult(request.requestId, "failed");
-    }
+/** Produces the only data shape sent back to the originating property inspector. */
+function createImportChromeSessionResult(requestId, outcome) {
+    return { kind: IMPORT_CHROME_SESSION_RESULT_KIND, requestId, outcome };
 }
 
 let NanDemoUsage = (() => {
@@ -12304,14 +12578,39 @@ let NanDemoUsage = (() => {
         async onSendToPlugin(ev) {
             if (!ev.action.isDial() || !this.hasActiveLifecycle(ev.action))
                 return;
+            const request = parseImportChromeSessionMessage(ev.payload);
+            if (!request)
+                return;
             const action = ev.action;
             const isCurrent = this.lifecycleGuard(action);
             const isSameAppearance = this.appearanceGuard(action);
-            const result = await handleNanApiKeyMessage(ev.payload, this.dashboard);
-            if (!result || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id)
+            if (!isCurrent())
+                return;
+            await action.setFeedback(renderNanImportProgress());
+            let result;
+            let outcome = "failed";
+            try {
+                result = await this.dashboard.importChromeSession();
+                outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
+            }
+            catch {
+                result = { state: "import-unavailable" };
+            }
+            if (!isCurrent() || !isSameAppearance())
+                return;
+            if (result) {
+                const settings = this.desiredSettings.get(action.id) ?? {};
+                await this.render(action, result.state === "ready"
+                    ? { source: "dashboard", quota: result.quota, stale: false }
+                    : { source: "dashboard", stale: false, error: result.state }, settings);
+            }
+            await this.sendImportResult(action, request, outcome, isCurrent, isSameAppearance);
+        }
+        async sendImportResult(action, request, outcome, isCurrent, isSameAppearance) {
+            if (!("requestId" in request) || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id)
                 return;
             try {
-                await streamDeck.ui.sendToPropertyInspector(result);
+                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
             }
             catch { }
         }
@@ -12337,7 +12636,7 @@ let NanDemoUsage = (() => {
             await this.render(action, state, settings);
         }
         rotateSettings(settings, state, ticks) {
-            const models = listNanModels(state);
+            const models = state.quota?.models.map(({ model }) => model) ?? [];
             if (models.length === 0)
                 return settings;
             const current = resolveNanLiveModel(models, models, settings.model);
@@ -12391,16 +12690,12 @@ let NanDemoUsage = (() => {
 const THEME = {
     bg: "#0e0c14",
     fg: "#f3f1f8",
-    muted: "#9a93ab",
     track: "#231f30",
     violet: "#7d39eb",
     violetSoft: "#b48cff",
     ok: "#7ed49c",
     warn: "#ffc247",
-    danger: "#ff5c6c",
-    dangerBg: "#7a0f1c",
-    dangerTrack: "rgba(0,0,0,0.25)",
-};
+    danger: "#ff5c6c"};
 const KEY_FONT = "'Helvetica Neue',Helvetica,Arial,sans-serif";
 /** Renders one bold SVG text run; an empty value renders nothing. */
 function text(value, x, y, fill, size, options = {}) {
@@ -12418,7 +12713,7 @@ function chipHeader(title, fg, chipFill = THEME.violet) {
 /** Gauge track (plus optional fill) and the trailing live dot or status text. */
 function gaugeFooter(gaugeWidth, fillColor, status, statusColor, trackColor) {
     const trackWidth = status ? 42 : 52;
-    const fill = gaugeWidth > 0 ? `<rect x="6" y="62" width="${Math.min(trackWidth, gaugeWidth * trackWidth / 60).toFixed(2)}" height="3" rx="1.5" fill="${fillColor}"/>` : "";
+    const fill = "";
     const trailer = status ? text(status, 66, 65, statusColor, 5, { anchor: "end" }) : `<circle cx="63" cy="63.5" r="1.5" fill="${THEME.ok}"/>`;
     return `<rect x="6" y="62" width="${trackWidth}" height="3" rx="1.5" fill="${trackColor}"/>${fill}${trailer}`;
 }
@@ -12426,123 +12721,208 @@ function escapeXml(value) {
     return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character]);
 }
 
-/** Renders a full 72px key canvas; Stream Deck scales the SVG for high-density devices. */
-function renderNanModelUsageImage(state, settings) {
-    return `data:image/svg+xml,${encodeURIComponent(renderNanModelUsageSvg(state, settings))}`;
+const DEFAULT_KEY_STYLE = "ring";
+/** refactoria.dev brand tokens for 144x144 key artwork. */
+const KEY_BRAND = {
+    bg: "#0b0714",
+    track: "#2c2144",
+    brand: "#7127ff",
+    text: "#ffffff",
+    muted: "#c9c1de",
+    subtle: "#9a8fb8",
+    warn: "#ffb547",
+    critical: "#ff5470",
+    stale: "#6b5f8a",
+};
+const WARN_AT = 75;
+const CRITICAL_AT = 90;
+const SANS = "Inter,-apple-system,'Helvetica Neue',Arial,sans-serif";
+const MONO = "'JetBrains Mono','SF Mono',Menlo,monospace";
+const SIZE = 144;
+const MODEL_ALIASES = {
+    "deepseek-v4-flash": "DS V4 FLASH",
+    "mimo-v2.5": "MIMO V2.5",
+    "qwen3.6": "QWEN 3.6",
+    "gemma4": "GEMMA 4",
+};
+function normalizeKeyStyle(value) {
+    return value === "bar" || value === "dual" || value === "ring" ? value : DEFAULT_KEY_STYLE;
 }
-function renderNanModelUsageSvg(state, settings) {
-    const selected = validModel(settings.model) ? settings.model : undefined;
-    const quotaModel = selected && state.quota
-        ? state.quota.models.find((entry) => entry.model === selected) ?? state.quota.uncappedModels.find((entry) => entry.model === selected)
-        : undefined;
-    const monthlyModel = selected ? state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected) : undefined;
-    const display = !selected
-        ? pendingSelection()
-        : quotaModel
-            ? isCapped(quotaModel)
-                ? capped(quotaModel, state.stale)
-                : uncapped(quotaModel, state.stale)
-            : monthlyModel
-                ? monthly(monthlyModel, state.metricsStale === true || state.stale)
-                : !state.quota && !state.metrics
-                    ? unavailable(state)
-                    : state.catalog?.includes(selected)
-                        ? noCap(selected, state.metrics ? "0" : "--", state.metricsStale === true || state.stale)
-                        : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
-    const foreground = display.foreground ?? THEME.fg;
-    const [firstLabel = "", secondLabel = ""] = display.label;
-    const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="NaN model usage">
-<rect width="72" height="72" rx="6" fill="${display.background ?? THEME.bg}"/>${border}${chipHeader(firstLabel, foreground)}${text(secondLabel, 6, 19, foreground, 6)}
-${text(display.primary, 6, 37, display.accent, 17, { letterSpacing: "-0.02em" })}${text(display.secondary, 6, 46, foreground, 5.5)}${text(display.tertiary, 6, 52, foreground, 5.5, { opacity: 0.6 })}
-${gaugeFooter(display.gauge, display.accent, display.status, display.statusColor ?? display.accent, display.gaugeTrack ?? THEME.track)}</svg>`;
+/** Short uppercase label for the single label slot; unknown models are truncated to 11 characters. */
+function modelAlias(model) {
+    const known = MODEL_ALIASES[model];
+    if (known)
+        return known;
+    const upper = model.toUpperCase();
+    return upper.length > 11 ? `${upper.slice(0, 10)}…` : upper;
 }
-function pendingSelection() {
-    return { label: ["MODEL"], primary: "--", secondary: "CHOOSE MODEL", tertiary: "IN SETTINGS", status: "SETUP", statusColor: THEME.violetSoft, accent: THEME.muted, gauge: 0 };
+function levelColor(percent, stale = false) {
+    if (stale)
+        return KEY_BRAND.stale;
+    if (percent >= CRITICAL_AT)
+        return KEY_BRAND.critical;
+    if (percent >= WARN_AT)
+        return KEY_BRAND.warn;
+    return KEY_BRAND.brand;
 }
-function capped(model, stale) {
-    const limit = model.percentage > 90;
-    const amber = !limit && (model.percentage > 80 || stale);
-    return {
-        label: labelLines(model.model),
-        primary: `${formatPercentage(model.percentage)}%`,
-        secondary: `USED ${compact$1(model.tokensUsed)}`,
-        tertiary: `CAP ${compact$1(model.cap)} · ${period(model)}`,
-        status: stale ? "STALE" : limit ? "LIMIT" : "",
-        statusColor: limit ? "#ffffff" : THEME.warn,
-        accent: limit ? "#ffffff" : amber ? THEME.warn : THEME.ok,
-        gauge: 60 * Math.min(100, Math.max(0, model.percentage)) / 100,
-        background: limit ? THEME.dangerBg : undefined,
-        border: limit ? THEME.danger : undefined,
-        foreground: limit ? "#ffffff" : undefined,
-        gaugeTrack: limit ? THEME.dangerTrack : undefined,
-    };
+function formatReset(resetAt, now) {
+    if (!resetAt)
+        return "";
+    const target = Date.parse(resetAt);
+    if (Number.isNaN(target))
+        return "";
+    if (target - now <= 0)
+        return "NOW";
+    const minutesTotal = Math.floor((target - now) / 60_000);
+    const days = Math.floor(minutesTotal / 1440);
+    const hours = Math.floor((minutesTotal % 1440) / 60);
+    const minutes = minutesTotal % 60;
+    if (days > 0)
+        return `${days}D ${hours}H`;
+    if (hours > 0)
+        return `${hours}H ${minutes}M`;
+    return `${Math.max(1, minutes)}M`;
 }
-function isCapped(value) {
-    return typeof value === "object" && value !== null && "cap" in value && "percentage" in value;
+function ringDash(percent, radius) {
+    const circumference = 2 * Math.PI * radius;
+    const clamped = Math.min(100, Math.max(0, percent));
+    return { circumference, filled: circumference * clamped / 100 };
 }
-function uncapped(model, stale) {
-    return {
-        label: labelLines(model.model),
-        primary: compact$1(model.tokensUsed),
-        secondary: "UNCAPPED",
-        tertiary: period(model),
-        status: stale ? "STALE" : "",
-        statusColor: THEME.warn,
-        accent: stale ? THEME.warn : THEME.ok,
-        gauge: 0,
-    };
+function renderKeyImage(view, style) {
+    return `data:image/svg+xml,${encodeURIComponent(renderKeySvg(view, style))}`;
 }
-function monthly(model, stale) {
-    return {
-        label: labelLines(model.model),
-        primary: compact$1(model.totalTokens),
-        secondary: "MONTH TOKENS",
-        tertiary: "NO CAP · MTD",
-        status: stale ? "STALE" : "",
-        statusColor: THEME.warn,
-        accent: stale ? THEME.warn : THEME.violetSoft,
-        gauge: 0,
-    };
+function renderKeySvg(view, style) {
+    const body = view.error || view.rows.length === 0 ? errorBody(view) : style === "bar" ? barBody(view) : style === "dual" ? dualBody(view) : ringBody(view);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" role="img" aria-label="${escapeXml(`${view.label} usage`)}">`
+        + `<rect width="${SIZE}" height="${SIZE}" rx="14" fill="${KEY_BRAND.bg}"/>${body}</svg>`;
 }
-function noCap(model, primary, stale) {
-    return { label: labelLines(model), primary, secondary: "MONTH TOKENS", tertiary: "NO CAP", status: stale ? "STALE" : "", statusColor: THEME.warn, accent: stale ? THEME.warn : THEME.muted, gauge: 0 };
+function t(value, x, y, fill, options = {}) {
+    if (!value)
+        return "";
+    const size = options.size ?? 13;
+    const family = options.mono ? MONO : SANS;
+    return `<text x="${x}" y="${y}" fill="${fill}" font-family="${family}" font-size="${size}" font-weight="700" text-anchor="${options.anchor ?? "start"}">${escapeXml(value)}</text>`;
 }
-function unavailable(state) {
-    const { error } = state;
-    const status = error === "needs-key" || error === "key-rejected" ? "API KEY"
-        : error === "keychain-unavailable" || state.metricsError !== undefined ? "ERROR" : "NO DATA";
-    const secondary = status === "API KEY" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
-    const accent = status === "ERROR" ? THEME.danger : THEME.warn;
-    return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
+const pct = (value) => `${Math.round(value)}%`;
+const label = (view) => view.label.toUpperCase();
+const hasPercent = (row) => row?.percent !== undefined && Number.isFinite(row.percent);
+function primaryText(view) {
+    const row = view.rows[0];
+    return hasPercent(row) ? pct(row.percent) : view.value ?? "--";
 }
-function period(model) {
-    const details = [];
-    if (model.resetAt) {
-        const date = new Date(model.resetAt);
-        if (!Number.isNaN(date.valueOf()))
-            details.push(`${UTC_MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`);
+function accent(view, row) {
+    if (view.stale || !hasPercent(row))
+        return KEY_BRAND.stale;
+    return levelColor(row.percent);
+}
+/** The STALE marker replaces the reset countdown when the data is stale. */
+function footerText(view, reset) {
+    return view.stale ? { text: "STALE", color: KEY_BRAND.warn } : { text: reset ?? "", color: KEY_BRAND.subtle };
+}
+function errorBody(view) {
+    const status = view.status ?? "NO DATA";
+    const color = view.error ? KEY_BRAND.critical : KEY_BRAND.warn;
+    return t(label(view), 72, 26, KEY_BRAND.subtle, { anchor: "middle" })
+        + t("--", 72, 84, KEY_BRAND.stale, { anchor: "middle", mono: true, size: 40 })
+        + t(status, 72, 116, color, { anchor: "middle" });
+}
+function ringBody(view) {
+    const row = view.rows[0];
+    const percent = hasPercent(row);
+    const shown = primaryText(view);
+    const radius = 46;
+    const cx = 72, cy = 82;
+    const color = accent(view, row);
+    const dashed = percent ? "" : ' stroke-linecap="round" stroke-dasharray="4 8"';
+    const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${KEY_BRAND.track}" stroke-width="10"${dashed}/>`;
+    let arc = "";
+    if (hasPercent(row)) {
+        const { circumference, filled } = ringDash(row.percent, radius);
+        if (filled > 0) {
+            arc = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${filled.toFixed(2)} ${(circumference - filled).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+        }
     }
-    if (model.windowHours)
-        details.push(`${model.windowHours}H`);
-    if (details.length === 1 && model.windowHours && !model.resetAt)
-        return `${details[0]} WINDOW`;
-    return details.length > 0 ? details.join(" · ") : "QUOTA";
+    const footer = footerText(view, row.reset);
+    return `${track}${arc}`
+        + t(label(view), 72, 20, KEY_BRAND.subtle, { anchor: "middle" })
+        + t(shown, 72, 90, percent ? KEY_BRAND.text : KEY_BRAND.muted, { anchor: "middle", mono: true, size: shown.length > 4 ? 24 : 30 })
+        + t(footer.text, 72, 110, footer.color, { anchor: "middle", mono: true });
 }
-function labelLines(value) {
-    if (value.length <= 12)
-        return [value];
-    const candidate = value.slice(0, 12);
-    const breakAt = Math.max(candidate.lastIndexOf("-"), candidate.lastIndexOf("_"), candidate.lastIndexOf(" "));
-    const firstEnd = breakAt >= 4 ? breakAt + 1 : 12;
-    const first = value.slice(0, firstEnd);
-    const rest = value.slice(firstEnd);
-    return [first, rest.length > 12 ? `${rest.slice(0, 11)}…` : rest];
+function barBody(view) {
+    const row = view.rows[0];
+    const percent = hasPercent(row);
+    const shown = primaryText(view);
+    const color = accent(view, row);
+    const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
+    const fill = width > 0 ? `<rect x="12" y="98" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "";
+    const footer = footerText(view, row.reset);
+    return t(label(view), 12, 26, KEY_BRAND.subtle)
+        + `<circle cx="132" cy="21" r="5" fill="${color}"/>`
+        + t(shown, 12, 82, percent ? KEY_BRAND.text : KEY_BRAND.muted, { mono: true, size: shown.length > 4 ? 36 : 44 })
+        + `<rect x="12" y="98" width="120" height="8" rx="4" fill="${KEY_BRAND.track}"/>${fill}`
+        + t(footer.text, 12, 130, footer.color, { mono: true });
 }
-const UTC_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+function dualBody(view) {
+    const rows = view.rows.slice(0, 2);
+    const parts = [t(label(view), 12, 26, KEY_BRAND.subtle)];
+    rows.forEach((row, index) => {
+        const percent = hasPercent(row);
+        const top = 62 + index * 40;
+        const color = accent(view, row);
+        const shown = hasPercent(row) ? pct(row.percent) : index === 0 && view.value ? view.value : "--";
+        const width = hasPercent(row) ? 120 * Math.min(100, Math.max(0, row.percent)) / 100 : 120;
+        parts.push(t(row.label.toUpperCase(), 12, top, KEY_BRAND.muted), t(shown, 132, top, percent ? KEY_BRAND.text : KEY_BRAND.muted, { anchor: "end", mono: true, size: 16 }), `<rect x="12" y="${top + 8}" width="120" height="8" rx="4" fill="${KEY_BRAND.track}"/>`, width > 0 ? `<rect x="12" y="${top + 8}" width="${width.toFixed(2)}" height="8" rx="4" fill="${color}"/>` : "");
+    });
+    const footer = footerText(view, rows.length === 1 ? rows[0].reset : undefined);
+    parts.push(t(footer.text, 12, 134, footer.color, { mono: true }));
+    return parts.join("");
+}
+
+/** Maps shared dashboard usage onto the style-agnostic key view model. */
+function buildNanModelKeyView(state, settings, now) {
+    const selected = validModel(settings.model) ? settings.model : undefined;
+    if (!selected)
+        return { label: "MODEL", rows: [], status: "SETUP" };
+    const capped = state.quota?.models.find((entry) => entry.model === selected);
+    if (capped) {
+        return {
+            label: modelAlias(selected),
+            rows: [{ label: windowLabel(capped.windowHours), percent: capped.percentage, reset: formatReset(capped.resetAt, now) }],
+            stale: state.stale,
+        };
+    }
+    const uncapped = state.quota?.uncappedModels.find((entry) => entry.model === selected);
+    if (uncapped) {
+        return {
+            label: modelAlias(selected),
+            rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) }],
+            value: compact$1(uncapped.tokensUsed),
+            stale: state.stale,
+        };
+    }
+    const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
+    if (monthly) {
+        return { label: modelAlias(selected), rows: [{ label: "MONTH" }], value: compact$1(monthly.totalTokens), stale: state.metricsStale === true || state.stale };
+    }
+    if (!state.quota && !state.metrics) {
+        const status = state.error === "needs-import" || state.error === "import-busy" ? "IMPORT" : state.error === "transient" ? "ERROR" : "NO DATA";
+        return { label: "DASHBOARD", rows: [], status, error: status === "ERROR" };
+    }
+    return { label: modelAlias(selected), rows: [], status: "NO DATA" };
+}
+function renderNanModelKeyImage(state, settings, now = Date.now()) {
+    return renderKeyImage(buildNanModelKeyView(state, settings, now), normalizeKeyStyle(settings.keyStyle));
+}
+/** Provider windows without hours are monthly; 168h is the weekly window. */
+function windowLabel(hours) {
+    if (hours === null)
+        return "MONTH";
+    return hours === 168 ? "WEEK" : `${hours}H`;
+}
 function compact$1(value) { return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
-function formatPercentage(value) { return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, ""); }
 function validModel(value) { return typeof value === "string" && value.length > 0 && value.length <= 128 && value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value); }
+
+const DASHBOARD_URL = "https://cloud.nan.builders/dashboard";
 
 const GET_MODELS = "nan.modelUsage.getModels.v1";
 const REFRESH_MODELS = "nan.modelUsage.refreshModels.v1";
@@ -12592,19 +12972,25 @@ let NanModelUsage = (() => {
         async onKeyDown(ev) {
             if (!this.isCurrent(ev.action))
                 return;
-            await this.dashboard.getUsage({ source: "dashboard" });
+            try {
+                await streamDeck.system.openUrl(DASHBOARD_URL);
+            }
+            catch {
+                streamDeck.logger.warn("NaN Dashboard could not be opened.");
+            }
         }
         async onSendToPlugin(ev) {
             if (!ev.action.isKey() || !this.isCurrent(ev.action))
                 return;
-            const keyResult = await handleNanApiKeyMessage(ev.payload, this.dashboard);
-            if (keyResult) {
-                if (this.isCurrent(ev.action) && streamDeck.ui.action?.id === ev.action.id) {
-                    try {
-                        await streamDeck.ui.sendToPropertyInspector(keyResult);
-                    }
-                    catch { }
+            const importRequest = parseImportChromeSessionMessage(ev.payload);
+            if (importRequest) {
+                let outcome = "failed";
+                try {
+                    const result = await this.dashboard.importChromeSession();
+                    outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
                 }
+                catch { }
+                await this.sendImportResult(ev.action, importRequest, outcome);
                 return;
             }
             if (isModelsRequest(ev.payload)) {
@@ -12633,21 +13019,31 @@ let NanModelUsage = (() => {
         async render(entry, usage) {
             if (this.visible.get(entry.action.id) !== entry)
                 return;
-            const image = renderNanModelUsageImage(usage, entry.settings);
+            const image = renderNanModelKeyImage(usage, entry.settings);
             if (this.visible.get(entry.action.id) !== entry)
                 return;
             await entry.action.setImage(image);
+        }
+        async sendImportResult(action, request, outcome) {
+            if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
+                return;
+            try {
+                await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+            }
+            catch { }
         }
         sendModels(action, usage) {
             // The SDK routes this only to its current property-inspector context; do not send a
             // response if the inspector changed while an asynchronous shared refresh completed.
             if (streamDeck.ui.action?.id !== action.id)
                 return Promise.resolve();
-            const models = listNanModels(usage).map((id) => ({
-                id,
-                kind: usage.quota?.models.some(({ model }) => model === id) ? "capped"
-                    : usage.quota?.uncappedModels.some(({ model }) => model === id) ? "uncapped" : "monthly",
-            }));
+            const models = [
+                ...(usage.quota?.models.map(({ model }) => ({ id: model, kind: "capped" })) ?? []),
+                ...(usage.quota?.uncappedModels.map(({ model }) => ({ id: model, kind: "uncapped" })) ?? []),
+                ...(usage.metrics?.monthToDate.byModel
+                    .filter(({ model }) => !usage.quota?.models.some((quota) => quota.model === model) && !usage.quota?.uncappedModels.some((quota) => quota.model === model))
+                    .map(({ model }) => ({ id: model, kind: "monthly" })) ?? []),
+            ];
             return streamDeck.ui.sendToPropertyInspector({ kind: MODELS, models });
         }
     });
@@ -12722,13 +13118,16 @@ class NanMetricsUsage extends SingletonAction {
     async onSendToPlugin(ev) {
         if (!ev.action.isKey() || !this.isCurrent(ev.action))
             return;
-        const result = await handleNanApiKeyMessage(ev.payload, this.dashboard);
-        if (!result || !this.isCurrent(ev.action) || streamDeck.ui.action?.id !== ev.action.id)
+        const request = parseImportChromeSessionMessage(ev.payload);
+        if (!request)
             return;
+        let outcome = "failed";
         try {
-            await streamDeck.ui.sendToPropertyInspector(result);
+            const result = await this.dashboard.importChromeSession();
+            outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
         }
         catch { }
+        await this.sendImportResult(ev.action, request, outcome);
     }
     onWillDisappear(ev) {
         const entry = this.visible.get(ev.action.id);
@@ -12739,6 +13138,14 @@ class NanMetricsUsage extends SingletonAction {
     }
     isCurrent(action) {
         return this.visible.get(action.id)?.action === action;
+    }
+    async sendImportResult(action, request, outcome) {
+        if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id)
+            return;
+        try {
+            await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
+        }
+        catch { }
     }
     async redrawVisible(usage) {
         await Promise.all([...this.visible.values()].map((entry) => this.render(entry, usage)));
@@ -12788,7 +13195,6 @@ let NanMonthlyTokensUsage = (() => {
     return _classThis;
 })();
 
-const DASHBOARD_URL = "https://cloud.nan.builders/dashboard";
 const OPEN_FAILED_WARNING = "NaN Dashboard could not be opened.";
 /** Keypad-only launcher for the NaN Dashboard; it owns no settings or dashboard lifecycle. */
 let NanDashboardLauncher = (() => {

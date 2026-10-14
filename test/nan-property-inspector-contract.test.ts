@@ -167,6 +167,12 @@ test("NaN Dashboard launcher inspector is settings-free and cannot request model
   assert.match(inspector, /if \(isNanDashboardLauncher\) return;/);
 });
 
+test("model key inspector exposes a ring/bar/dual keyStyle selector saved as a setting", () => {
+  assert.match(inspector, /<select id="nanKeyStyle"[\s\S]*value="ring"[\s\S]*value="bar"[\s\S]*value="dual"/);
+  assert.match(inspector, /save\(\{ keyStyle: event\.target\.value \}\)/);
+  assert.match(inspector, /\["ring", "bar", "dual"\]\.includes\(settings\.keyStyle\)/);
+});
+
 function createInspectorHarness(): {
   connect(action: string): void;
   socket: FakeWebSocket;
@@ -180,7 +186,7 @@ function createInspectorHarness(): {
   runLatestTimer(): void;
 } {
   const elements = new Map<string, FakeElement>();
-  for (const id of ["refreshSettings", "nanApiKeySettings", "nanSettings", "nanModelUsageSettings", "autoRefresh", "refreshInterval", "nanModel", "nanKeyModel", "refreshNanModels", "nanApiKey", "saveApiKey", "clearApiKey", "apiKeyStatus"]) {
+  for (const id of ["refreshSettings", "nanApiKeySettings", "nanSettings", "nanModelUsageSettings", "autoRefresh", "refreshInterval", "nanModel", "nanKeyModel", "nanKeyStyle", "refreshNanModels", "nanApiKey", "saveApiKey", "clearApiKey", "apiKeyStatus"]) {
     elements.set(`#${id}`, new FakeElement());
   }
   const timers: Array<() => void> = [];

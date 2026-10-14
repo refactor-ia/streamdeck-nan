@@ -1,7 +1,7 @@
 import { action, type KeyDownEvent, SingletonAction, streamDeck } from "@elgato/streamdeck";
+import { DASHBOARD_URL } from "./nan-dashboard-url.js";
 
 type NanDashboardLauncherSettings = Record<string, never>;
-const DASHBOARD_URL = "https://cloud.nan.builders/dashboard";
 const OPEN_FAILED_WARNING = "NaN Dashboard could not be opened.";
 
 /** Keypad-only launcher for the NaN Dashboard; it owns no settings or dashboard lifecycle. */

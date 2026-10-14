@@ -227,6 +227,15 @@
       </button>
     </div>
     <p>Models come from your NaN account. Refresh after saving your API key.</p>
+    <h2>Key style</h2>
+    <label class="select-wrap">
+      <select id="nanKeyStyle" aria-label="Key style">
+        <option value="ring">Ring</option>
+        <option value="bar">Bar</option>
+        <option value="dual">Dual rows</option>
+      </select>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#bdbdbd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </label>
   </section>
 
   <script>
@@ -414,7 +423,11 @@
       document.querySelector("#nanModelUsageSettings").hidden = !isNanModel;
       document.querySelector("#autoRefresh").checked = settings.autoRefresh !== false;
       document.querySelector("#refreshInterval").value = settings.refreshInterval || 30;
-      if (isNanModel) renderKeyModels();
+      if (isNanModel) {
+        renderKeyModels();
+        const style = ["ring", "bar", "dual"].includes(settings.keyStyle) ? settings.keyStyle : "ring";
+        document.querySelector("#nanKeyStyle").value = style;
+      }
       if (isNanDashboardLauncher) return;
       if (!isNanDemo) return;
       const selectedModel = validModel(settings.model) ? settings.model : "deepseek-v4-flash";
@@ -439,6 +452,7 @@
     });
     document.querySelector("#nanModel").addEventListener("change", (event) => save({ model: event.target.value, liveSelectionInitialized: true }));
     document.querySelector("#nanKeyModel").addEventListener("change", (event) => save({ model: event.target.value }));
+    document.querySelector("#nanKeyStyle").addEventListener("change", (event) => save({ keyStyle: event.target.value }));
     document.querySelector("#refreshNanModels").addEventListener("click", () => {
       if (actionUuid !== NAN_MODEL_ACTION || socket?.readyState !== WebSocket.OPEN) return;
       send("sendToPlugin", { context, payload: { kind: REFRESH_MODELS } });
