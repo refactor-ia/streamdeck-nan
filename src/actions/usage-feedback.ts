@@ -2,6 +2,8 @@ import type { CoordinatedUsageResult } from "../usage/provider-coordinator.js";
 import type { NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { levelColor } from "../branding/tokens.js";
 import { listNanModels, resolveNanLiveModel } from "./nan-live-model.js";
+import { projectMonthlyPace, type NanPaceProjection } from "./nan-pace-projection.js";
+import type { NanModelQuota } from "../providers/nan/nan-api-quota-provider.js";
 
 /** Bar item value with a per-update fill color (Stream Deck bar layout item override). */
 export interface BarFeedback {
@@ -52,7 +54,7 @@ export interface NanDashboardFeedback {
     | "DASHBOARD UNAVAILABLE" | "INVALID SOURCE";
 }
 
-export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: { model?: string }): NanDashboardFeedback {
+export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: { model?: string }, now: number = Date.now()): NanDashboardFeedback {
   const base = { title: "NaN" as const, demo: "DASHBOARD" as const };
   const models = listNanModels(state);
   const selected = state.error ? undefined : resolveNanLiveModel(models, models, settings.model);
@@ -80,7 +82,7 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
       model: model.model,
       value: `${compactNumber(model.tokensUsed)} / ${compactNumber(model.cap)}`,
       // The text keeps the raw API percentage (including over-cap values); only the bar is clamped.
-      unit: `${formatPercentage(model.percentage)}% · ${model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL"}`,
+      unit: `${formatPercentage(model.percentage)}% · ${monthlyDetail(state, model, now)}`,
       indicator: bar(model.percentage, state.stale),
       status,
     };
@@ -90,6 +92,22 @@ export function renderNanDashboardFeedback(state: NanDashboardUsage, settings: {
   const monthly = state.metrics?.monthToDate.byModel.find((entry) => entry.model === selected);
   const value = monthly ? compactNumber(monthly.totalTokens) : state.metrics ? "0" : "--";
   return { ...base, model: selected, value, unit: monthly ? "NO CAP · MONTH TOKENS" : "NO CAP", indicator: bar(undefined), status };
+}
+
+function monthlyDetail(state: NanDashboardUsage, model: NanModelQuota, now: number): string {
+  // Stale usage against a live clock would skew the rate, so only fresh data is projected.
+  const pace = state.stale || !state.quota ? null
+    : projectMonthlyPace({ used: model.tokensUsed, cap: model.cap, periodStart: state.quota.periodStart ?? null, periodEnd: model.resetAt, now });
+  if (pace) return formatPace(pace);
+  return model.resetAt ? `RESETS ${formatResetDate(model.resetAt)}` : "PER MODEL";
+}
+
+function formatPace(pace: NanPaceProjection): string {
+  switch (pace.kind) {
+    case "cap-date": return `CAP ${formatResetDate(pace.at)}`;
+    case "capped": return "CAP REACHED";
+    case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
+  }
 }
 
 function dashboardStatus(state: NanDashboardUsage): NanDashboardFeedback["status"] {
