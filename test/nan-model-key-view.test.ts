@@ -52,7 +52,7 @@ test("no selection, missing model and unavailable dashboard map to status states
   assert.equal(missing.error, undefined);
   const imp = buildNanModelKeyView({ source: "dashboard", stale: false, error: "needs-key" }, { model: "qwen3.6" }, NOW);
   assert.deepEqual(imp, { label: "DASHBOARD", rows: [], status: "API KEY", error: false });
-  assert.equal(buildNanModelKeyView({ source: "dashboard", stale: false, error: "transient" }, { model: "qwen3.6" }, NOW).error, true);
+  assert.equal(buildNanModelKeyView({ source: "dashboard", stale: false, error: "keychain-unavailable" }, { model: "qwen3.6" }, NOW).error, true);
 });
 
 test("renderNanModelKeyImage honors keyStyle and defaults to ring", () => {
