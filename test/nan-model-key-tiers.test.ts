@@ -146,7 +146,7 @@ test("a windowed model without rolling data falls back to the MONTH billing peri
 
 test("uncapped model shows its compact token value and NO CAP without any percentage", () => {
   const view = buildNanModelKeyView(usage(), { model: "uncapped-qwen" }, NOW);
-  assert.deepEqual(view.rows, [{ label: "4H", reset: "NO CAP" }]);
+  assert.deepEqual(view.rows, [{ label: "MONTH", reset: "NO CAP" }]);
   assert.equal(view.value, "42K");
   for (const style of STYLES) {
     const svg = svgFor(usage(), style, "uncapped-qwen");
@@ -159,7 +159,9 @@ test("uncapped model shows its compact token value and NO CAP without any percen
 
 test("uncapped model with a known reset shows the countdown instead of NO CAP", () => {
   const state = usage({ quota: { ...quota, uncappedModels: [{ ...uncapped, resetAt: "2026-10-01T02:00:00Z" }] } });
-  assert.equal(buildNanModelKeyView(state, { model: "uncapped-qwen" }, NOW).rows[0]?.reset, "2H 0M");
+  const row = buildNanModelKeyView(state, { model: "uncapped-qwen" }, NOW).rows[0];
+  assert.equal(row?.reset, "2H 0M");
+  assert.equal(row?.label, "MONTH");
 });
 
 test("metrics-only model shows month-to-date tokens, NO CAP and no percentage", () => {

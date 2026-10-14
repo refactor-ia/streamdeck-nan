@@ -20,7 +20,8 @@ export function buildNanModelKeyView(state: NanDashboardUsage, settings: NanMode
   if (uncapped) {
     return {
       label: modelAlias(selected),
-      rows: [{ label: windowLabel(uncapped.windowHours), reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
+      // Uncapped quota carries no rolling usage: its reset belongs to the billing period.
+      rows: [{ label: "MONTH", reset: formatReset(uncapped.resetAt, now) || NO_CAP }],
       value: compact(uncapped.tokensUsed),
       stale: state.stale,
     };
