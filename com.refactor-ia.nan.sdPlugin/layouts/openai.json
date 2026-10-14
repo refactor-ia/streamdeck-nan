@@ -17,7 +17,7 @@
         "weight": 800
       },
       "value": "GPT / OPENAI",
-      "color": "#f3f1f8"
+      "color": "#ffffff"
     },
     {
       "key": "period",
@@ -34,7 +34,7 @@
         "weight": 800
       },
       "value": "WEEKLY",
-      "color": "#9a93ab"
+      "color": "#9a8fb8"
     },
     {
       "key": "value",
@@ -51,7 +51,7 @@
         "weight": 800
       },
       "value": "--",
-      "color": "#f3f1f8"
+      "color": "#ffffff"
     },
     {
       "key": "indicator",
@@ -62,8 +62,8 @@
         184,
         12
       ],
-      "bar_bg_c": "#231f30",
-      "bar_fill_c": "#7ed49c",
+      "bar_bg_c": "#2c2144",
+      "bar_fill_c": "#7127ff",
       "border_w": 0,
       "subtype": 0,
       "value": 0
@@ -83,7 +83,7 @@
         "weight": 800
       },
       "value": "",
-      "color": "#9a93ab"
+      "color": "#9a8fb8"
     }
   ]
 }
