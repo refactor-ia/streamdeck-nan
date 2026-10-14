@@ -11634,7 +11634,7 @@ async function getNanJson(options) {
         }
         if (response.status === 429) {
             safeCancel(response.body);
-            throw options.createError("rate-limited", parseRetryAfter(response.headers.get("retry-after")));
+            throw options.createError("rate-limited", parseRetryAfter(response.headers.get("retry-after"), clock));
         }
         // Redirects (including opaque ones) are refused so the key cannot be replayed elsewhere.
         if (!response.ok || response.redirected || response.type === "opaqueredirect" || response.status >= 300) {
@@ -11652,11 +11652,19 @@ async function getNanJson(options) {
         clock.clearTimeout(timer);
     }
 }
-function parseRetryAfter(value) {
-    const seconds = value === null ? NaN : Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0)
+function parseRetryAfter(value, clock) {
+    if (value === null || value.trim() === "")
         return DEFAULT_RETRY_AFTER_MS;
-    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+    const seconds = Number(value);
+    if (!Number.isNaN(seconds)) {
+        if (!Number.isFinite(seconds) || seconds < 0)
+            return DEFAULT_RETRY_AFTER_MS;
+        return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+    }
+    const date = Date.parse(value);
+    if (!Number.isFinite(date))
+        return DEFAULT_RETRY_AFTER_MS;
+    return Math.min(Math.max(date - (clock.now?.() ?? Date.now()), 0), MAX_RETRY_AFTER_MS);
 }
 async function readJson(response, signal, maxResponseBytes, createError) {
     const length = Number(response.headers.get("content-length"));

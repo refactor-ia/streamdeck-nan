@@ -3,6 +3,8 @@ import { isValidNanApiKey } from "./nan-api-key-store.js";
 export type NanHttpErrorKind = "auth-rejected" | "rate-limited" | "transport" | "schema";
 
 export interface NanHttpClock {
+  /** Current Unix time in milliseconds, used for HTTP-date Retry-After values. */
+  now?(): number;
   setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
   clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 }
@@ -53,7 +55,7 @@ export async function getNanJson<E extends Error>(options: NanHttpOptions<E>): P
     }
     if (response.status === 429) {
       safeCancel(response.body);
-      throw options.createError("rate-limited", parseRetryAfter(response.headers.get("retry-after")));
+      throw options.createError("rate-limited", parseRetryAfter(response.headers.get("retry-after"), clock));
     }
     // Redirects (including opaque ones) are refused so the key cannot be replayed elsewhere.
     if (!response.ok || response.redirected || response.type === "opaqueredirect" || response.status >= 300) {
@@ -69,10 +71,16 @@ export async function getNanJson<E extends Error>(options: NanHttpOptions<E>): P
   }
 }
 
-function parseRetryAfter(value: string | null): number {
-  const seconds = value === null ? NaN : Number(value);
-  if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_RETRY_AFTER_MS;
-  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+function parseRetryAfter(value: string | null, clock: NanHttpClock): number {
+  if (value === null || value.trim() === "") return DEFAULT_RETRY_AFTER_MS;
+  const seconds = Number(value);
+  if (!Number.isNaN(seconds)) {
+    if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_RETRY_AFTER_MS;
+    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+  }
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return DEFAULT_RETRY_AFTER_MS;
+  return Math.min(Math.max(date - (clock.now?.() ?? Date.now()), 0), MAX_RETRY_AFTER_MS);
 }
 
 async function readJson<E extends Error>(response: Response, signal: AbortSignal, maxResponseBytes: number, createError: (kind: NanHttpErrorKind) => E): Promise<unknown> {
