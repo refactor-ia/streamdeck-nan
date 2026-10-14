@@ -216,7 +216,7 @@ The NaN Usage dial and the NaN Model Usage, NaN Total Tokens, and NaN Monthly To
 
 ### NaN Validation Status
 
-The API key flow has focused mocked tests only. The quota service's acceptance of an API key as a bearer credential is unverified, so it degrades silently by design. It still requires human validation with a real API key, followed by the project's release-process validation. This checkout does not claim production readiness, perform signing, restart Stream Deck, or deploy the plugin.
+The API key flow is covered by focused mocked tests and was validated manually on a real Stream Deck with a real API key, including the quota service accepting the key as a bearer credential. If the quota service ever rejects the key, only the quota view is hidden; usage keeps working. A release still requires the project's release-process validation. This checkout does not claim production readiness, perform signing, restart Stream Deck, or deploy the plugin.
 
 ### Platform Support
 
