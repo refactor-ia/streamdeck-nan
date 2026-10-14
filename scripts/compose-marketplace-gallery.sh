@@ -229,11 +229,11 @@ $MAGICK "$WORK/bg.png" \
   -annotate +${P1%%,*}+${P1##*,} "1" -annotate +${P2%%,*}+${P2##*,} "2" -annotate +${P3%%,*}+${P3##*,} "3" \
   -font "$HEAD_FONT" -pointsize 27 \
   -annotate +990+330 "Add NaN Usage to a dial" \
-  -annotate +990+510 "Import session from Chrome" \
+  -annotate +990+510 "Save your NaN API key" \
   -annotate +990+690 "Choose your model" \
   -fill "$BODY_C" -font "$BODY_FONT" -pointsize 21 \
   -annotate +990+368 "Add the action in the Stream Deck app." \
-  -annotate +990+548 "Use the import button shown here." \
+  -annotate +990+548 "Paste it in the panel shown here." \
   -annotate +990+728 "Pick the model your dial monitors." \
   -fill "$MUTED" -pointsize 20 \
   -annotate +96+822 "NaN Usage configuration panel in the Stream Deck app." \

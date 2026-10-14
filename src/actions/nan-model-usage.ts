@@ -10,8 +10,9 @@ import {
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
+import { listNanModels } from "./nan-live-model.js";
 import { renderNanModelUsageImage, type NanModelSettings } from "./nan-model-feedback.js";
-import { createImportChromeSessionResult, parseImportChromeSessionMessage, type ImportChromeSessionRequest } from "./nan-chrome-import-message.js";
+import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 
 export type NanModelUsageSettings = NanModelSettings;
 const GET_MODELS = "nan.modelUsage.getModels.v1";
@@ -55,14 +56,11 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, NanModelUsageSettings>): Promise<void> {
     if (!ev.action.isKey() || !this.isCurrent(ev.action)) return;
-    const importRequest = parseImportChromeSessionMessage(ev.payload);
-    if (importRequest) {
-      let outcome: "ready" | "failed" | "busy" = "failed";
-      try {
-        const result = await this.dashboard.importChromeSession();
-        outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
-      } catch {}
-      await this.sendImportResult(ev.action, importRequest, outcome);
+    const keyResult = await handleNanApiKeyMessage(ev.payload, this.dashboard);
+    if (keyResult) {
+      if (this.isCurrent(ev.action) && streamDeck.ui.action?.id === ev.action.id) {
+        try { await streamDeck.ui.sendToPropertyInspector(keyResult); } catch {}
+      }
       return;
     }
     if (isModelsRequest(ev.payload)) {
@@ -96,28 +94,15 @@ export class NanModelUsage extends SingletonAction<NanModelUsageSettings> {
     await entry.action.setImage(image);
   }
 
-  private async sendImportResult(
-    action: KeyAction<NanModelUsageSettings>,
-    request: ImportChromeSessionRequest,
-    outcome: "ready" | "failed" | "busy",
-  ): Promise<void> {
-    if (!("requestId" in request) || !this.isCurrent(action) || streamDeck.ui.action?.id !== action.id) return;
-    try {
-      await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
-    } catch {}
-  }
-
   private sendModels(action: KeyAction<NanModelUsageSettings>, usage: NanDashboardUsage): Promise<void> {
     // The SDK routes this only to its current property-inspector context; do not send a
     // response if the inspector changed while an asynchronous shared refresh completed.
     if (streamDeck.ui.action?.id !== action.id) return Promise.resolve();
-    const models = [
-      ...(usage.quota?.models.map(({ model }) => ({ id: model, kind: "capped" as const })) ?? []),
-      ...(usage.quota?.uncappedModels.map(({ model }) => ({ id: model, kind: "uncapped" as const })) ?? []),
-      ...(usage.metrics?.monthToDate.byModel
-        .filter(({ model }) => !usage.quota?.models.some((quota) => quota.model === model) && !usage.quota?.uncappedModels.some((quota) => quota.model === model))
-        .map(({ model }) => ({ id: model, kind: "monthly" as const })) ?? []),
-    ];
+    const models = listNanModels(usage).map((id) => ({
+      id,
+      kind: usage.quota?.models.some(({ model }) => model === id) ? "capped" as const
+        : usage.quota?.uncappedModels.some(({ model }) => model === id) ? "uncapped" as const : "monthly" as const,
+    }));
     return streamDeck.ui.sendToPropertyInspector({ kind: MODELS, models });
   }
 }

@@ -75,6 +75,18 @@
       font: inherit;
       text-align: center;
     }
+    input[type="password"] {
+      width: 100%;
+      box-sizing: border-box;
+      height: 28px;
+      margin-bottom: 8px;
+      padding: 0 8px;
+      color: var(--pi-text-strong);
+      background: var(--pi-control);
+      border: 1px solid var(--pi-border-strong);
+      border-radius: 5px;
+      font: inherit;
+    }
     input[type="checkbox"] {
       appearance: none;
       -webkit-appearance: none;
@@ -181,14 +193,15 @@
     <label class="row"><span>Every</span> <span class="unit">seconds</span> <input id="refreshInterval" type="number" min="10" max="300" value="30"></label>
     <p>Between 10 and 300 seconds. Touch the strip or press the key to refresh right now.</p>
   </section>
-  <section id="nanChromeImportSettings" hidden>
-    <h2>Session</h2>
-    <button id="importChromeSession" class="primary" type="button">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-      <span>Import session from Chrome</span>
-    </button>
-    <p id="importChromeSessionStatus" role="status" aria-live="polite" class="status"></p>
-    <p>Dashboard quota uses an imported Chrome session only after you choose Import session from Chrome.</p>
+  <section id="nanApiKeySettings" hidden>
+    <h2>API key</h2>
+    <input id="nanApiKey" type="password" autocomplete="off" spellcheck="false" maxlength="256" placeholder="Paste your NaN API key" aria-label="NaN API key">
+    <div class="select-row">
+      <button id="saveApiKey" class="primary" type="button"><span>Save API key</span></button>
+      <button id="clearApiKey" type="button"><span>Remove key</span></button>
+    </div>
+    <p id="apiKeyStatus" role="status" aria-live="polite" class="status"></p>
+    <p>Usage is read from your NaN account with your personal API key. The key is stored in the macOS Keychain, never in Stream Deck settings.</p>
   </section>
   <section id="nanSettings" hidden>
     <h2>Model</h2>
@@ -213,7 +226,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
       </button>
     </div>
-    <p>Models come from your NaN account. Refresh after importing a session.</p>
+    <p>Models come from your NaN account. Refresh after saving your API key.</p>
   </section>
 
   <script>
@@ -225,8 +238,9 @@
     const GET_MODELS = "nan.modelUsage.getModels.v1";
     const REFRESH_MODELS = "nan.modelUsage.refreshModels.v1";
     const MODELS = "nan.modelUsage.models.v1";
-    const IMPORT_CHROME_SESSION = "nan.importChromeSession.v1";
-    const IMPORT_CHROME_SESSION_RESULT = "nan.importChromeSession.result.v1";
+    const SAVE_API_KEY = "nan.saveApiKey.v1";
+    const CLEAR_API_KEY = "nan.clearApiKey.v1";
+    const API_KEY_RESULT = "nan.apiKey.result.v1";
     const ACTION_TITLES = {
       "com.refactor-ia.nan.claude": ["Claude Code Usage", "Stream Deck+ dial"],
       "com.refactor-ia.nan.codex": ["GPT / OpenAI Usage", "Stream Deck+ dial"],
@@ -237,16 +251,17 @@
       [NAN_MONTHLY_TOKENS_ACTION]: ["NaN Monthly Tokens", "Keypad tile"],
       [NAN_DASHBOARD_ACTION]: ["NaN Dashboard", "Opens the dashboard in your browser"],
     };
-    const IMPORT_REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
-    const IMPORT_WATCHDOG_MS = 120_000;
+    const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+    const API_KEY_PATTERN = /^[\x21\x23-\x5b\x5d-\x7a\x7c\x7e]{1,256}$/;
+    const WATCHDOG_MS = 15_000;
     let socket;
     let context;
     let settings = {};
     let actionUuid = "";
     let modelEntries = [];
-    let pendingImportRequestId = "";
-    let importWatchdog;
-    let importRequestSequence = 0;
+    let pendingRequestId = "";
+    let requestWatchdog;
+    let requestSequence = 0;
 
     function connectElgatoStreamDeckSocket(port, uuid, registerEvent, _info, actionInfo) {
       context = uuid;
@@ -267,10 +282,10 @@
             modelEntries = message.payload.models.filter((entry) => typeof entry?.id === "string" && entry.id.length > 0 && entry.id.length <= 128 && entry.id.trim() === entry.id && !/[\u0000-\u001f\u007f-\u009f]/.test(entry.id));
             render();
           }
-          if (message?.event === "sendToPropertyInspector") receiveImportResult(message.payload);
+          if (message?.event === "sendToPropertyInspector") receiveApiKeyResult(message.payload);
         } catch (_) {}
       });
-      socket.addEventListener("close", () => clearPendingImport("Connection closed. Reopen this action to try again."));
+      socket.addEventListener("close", () => clearPendingRequest("Connection closed. Reopen this action to try again."));
       try {
         const parsedActionInfo = JSON.parse(actionInfo);
         actionUuid = parsedActionInfo.action || "";
@@ -288,42 +303,59 @@
         return false;
       }
     }
-    function isNanChromeImportAction() {
-      return actionUuid === NAN_DEMO_ACTION || actionUuid === NAN_MODEL_ACTION || actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
-    }
-    function renderImportStatus(message, tone) {
-      const button = document.querySelector("#importChromeSession");
-      button.disabled = pendingImportRequestId !== "";
-      const status = document.querySelector("#importChromeSessionStatus");
+    function renderApiKeyStatus(message, tone) {
+      document.querySelector("#saveApiKey").disabled = pendingRequestId !== "";
+      document.querySelector("#clearApiKey").disabled = pendingRequestId !== "";
+      const status = document.querySelector("#apiKeyStatus");
       status.textContent = message || "";
-      if (status.dataset) status.dataset.tone = tone || (pendingImportRequestId ? "pending" : "");
+      if (status.dataset) status.dataset.tone = tone || (pendingRequestId ? "pending" : "");
     }
-    function clearPendingImport(message, tone) {
-      if (importWatchdog) clearTimeout(importWatchdog);
-      importWatchdog = undefined;
-      pendingImportRequestId = "";
-      renderImportStatus(message, tone);
+    function clearPendingRequest(message, tone) {
+      if (requestWatchdog) clearTimeout(requestWatchdog);
+      requestWatchdog = undefined;
+      pendingRequestId = "";
+      renderApiKeyStatus(message, tone);
     }
-    function beginImport() {
-      if (!isNanChromeImportAction() || pendingImportRequestId) return;
-      const requestId = `import_${Date.now().toString(36)}_${++importRequestSequence}`;
-      if (!IMPORT_REQUEST_ID.test(requestId)) return;
-      if (!send("sendToPlugin", { context, payload: { kind: IMPORT_CHROME_SESSION, requestId } })) {
-        renderImportStatus("Unable to contact the plugin. Reopen this action and try again.");
+    function beginApiKeyRequest(payload, pendingMessage) {
+      if (pendingRequestId) return;
+      const requestId = `key_${Date.now().toString(36)}_${++requestSequence}`;
+      if (!REQUEST_ID.test(requestId)) return;
+      if (!send("sendToPlugin", { context, payload: { ...payload, requestId } })) {
+        renderApiKeyStatus("Unable to contact the plugin. Reopen this action and try again.", "error");
         return;
       }
-      pendingImportRequestId = requestId;
-      renderImportStatus("Importing session from Chrome. Please wait.");
-      importWatchdog = setTimeout(() => {
-        if (pendingImportRequestId === requestId) clearPendingImport("Still waiting for the plugin. You can retry when ready.");
-      }, IMPORT_WATCHDOG_MS);
+      pendingRequestId = requestId;
+      renderApiKeyStatus(pendingMessage);
+      requestWatchdog = setTimeout(() => {
+        if (pendingRequestId === requestId) clearPendingRequest("Still waiting for the plugin. You can retry when ready.");
+      }, WATCHDOG_MS);
     }
-    function receiveImportResult(payload) {
-      if (!pendingImportRequestId || typeof payload !== "object" || payload === null) return;
-      if (Object.keys(payload).length !== 3 || payload.kind !== IMPORT_CHROME_SESSION_RESULT || payload.requestId !== pendingImportRequestId) return;
-      if (payload.outcome === "ready") clearPendingImport("Session imported. Usage will refresh shortly.", "ok");
-      else if (payload.outcome === "failed") clearPendingImport("Import could not be completed. Check Chrome, then try again.", "error");
-      else if (payload.outcome === "busy") clearPendingImport("Another import is already in progress. Please wait and try again.");
+    function beginSave() {
+      if (pendingRequestId) return;
+      const field = document.querySelector("#nanApiKey");
+      const apiKey = field.value;
+      if (apiKey.length === 0) { renderApiKeyStatus("Enter your NaN API key first.", "error"); return; }
+      if (!API_KEY_PATTERN.test(apiKey)) { renderApiKeyStatus("That does not look like a valid API key.", "error"); return; }
+      const requestId = `key_${Date.now().toString(36)}_${++requestSequence}`;
+      if (!send("sendToPlugin", { context, payload: { kind: SAVE_API_KEY, requestId, apiKey } })) {
+        renderApiKeyStatus("Unable to contact the plugin. Reopen this action and try again.", "error");
+        return;
+      }
+      pendingRequestId = requestId;
+      renderApiKeyStatus("Saving API key. Please wait.");
+      requestWatchdog = setTimeout(() => {
+        if (pendingRequestId === requestId) clearPendingRequest("Still waiting for the plugin. You can retry when ready.");
+      }, WATCHDOG_MS);
+    }
+    function receiveApiKeyResult(payload) {
+      if (!pendingRequestId || typeof payload !== "object" || payload === null) return;
+      if (Object.keys(payload).length !== 3 || payload.kind !== API_KEY_RESULT || payload.requestId !== pendingRequestId) return;
+      if (payload.outcome === "saved") {
+        document.querySelector("#nanApiKey").value = "";
+        clearPendingRequest("API key saved. Usage will refresh shortly.", "ok");
+      } else if (payload.outcome === "cleared") clearPendingRequest("API key removed.", "ok");
+      else if (payload.outcome === "invalid") clearPendingRequest("That does not look like a valid API key.", "error");
+      else if (payload.outcome === "failed") clearPendingRequest("The key could not be saved. Try again.", "error");
     }
     function save(patch) {
       if (actionUuid === NAN_DASHBOARD_ACTION) return;
@@ -374,10 +406,10 @@
       const isNanDemo = actionUuid === NAN_DEMO_ACTION;
       const isNanModel = actionUuid === NAN_MODEL_ACTION;
       const isNanMetrics = actionUuid === NAN_TOTAL_TOKENS_ACTION || actionUuid === NAN_MONTHLY_TOKENS_ACTION;
-      const isNanChromeImportAction = isNanDemo || isNanModel || isNanMetrics;
+      const isNanApiKeyAction = isNanDemo || isNanModel || isNanMetrics;
       const isNanDashboardLauncher = actionUuid === NAN_DASHBOARD_ACTION;
       document.querySelector("#refreshSettings").hidden = isNanDemo || isNanModel || isNanMetrics || isNanDashboardLauncher;
-      document.querySelector("#nanChromeImportSettings").hidden = !isNanChromeImportAction;
+      document.querySelector("#nanApiKeySettings").hidden = !isNanApiKeyAction;
       document.querySelector("#nanSettings").hidden = !isNanDemo;
       document.querySelector("#nanModelUsageSettings").hidden = !isNanModel;
       document.querySelector("#autoRefresh").checked = settings.autoRefresh !== false;
@@ -411,7 +443,8 @@
       if (actionUuid !== NAN_MODEL_ACTION || socket?.readyState !== WebSocket.OPEN) return;
       send("sendToPlugin", { context, payload: { kind: REFRESH_MODELS } });
     });
-    document.querySelector("#importChromeSession").addEventListener("click", beginImport);
+    document.querySelector("#saveApiKey").addEventListener("click", beginSave);
+    document.querySelector("#clearApiKey").addEventListener("click", () => beginApiKeyRequest({ kind: CLEAR_API_KEY }, "Removing API key. Please wait."));
   </script>
 </body>
 </html>

@@ -11,9 +11,9 @@ import {
 } from "@elgato/streamdeck";
 import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
-import { cycleNanLiveModel, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
-import { renderNanDashboardFeedback, renderNanImportProgress } from "./usage-feedback.js";
-import { createImportChromeSessionResult, parseImportChromeSessionMessage, type ImportChromeSessionRequest } from "./nan-chrome-import-message.js";
+import { cycleNanLiveModel, listNanModels, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
+import { renderNanDashboardFeedback } from "./usage-feedback.js";
+import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 
 export type NanDemoSettings = RefreshSettings & Partial<{
   model: string;
@@ -85,46 +85,12 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
 
   override async onSendToPlugin(ev: SendToPluginEvent<any, any>): Promise<void> {
     if (!ev.action.isDial() || !this.hasActiveLifecycle(ev.action)) return;
-    const request = parseImportChromeSessionMessage(ev.payload);
-    if (!request) return;
     const action = ev.action as DialAction<NanDemoSettings>;
     const isCurrent = this.lifecycleGuard(action);
     const isSameAppearance = this.appearanceGuard(action);
-    if (!isCurrent()) return;
-    await action.setFeedback(renderNanImportProgress());
-    let result: Awaited<ReturnType<NanDashboardController["importChromeSession"]>> | undefined;
-    let outcome: "ready" | "failed" | "busy" = "failed";
-    try {
-      result = await this.dashboard.importChromeSession();
-      outcome = result.state === "ready" ? "ready" : result.state === "import-busy" ? "busy" : "failed";
-    } catch {
-      result = { state: "import-unavailable" };
-    }
-    if (!isCurrent() || !isSameAppearance()) return;
-    if (result) {
-      const settings = this.desiredSettings.get(action.id) ?? {};
-      await this.render(
-        action,
-        result.state === "ready"
-          ? { source: "dashboard", quota: result.quota, stale: false }
-          : { source: "dashboard", stale: false, error: result.state },
-        settings,
-      );
-    }
-    await this.sendImportResult(action, request, outcome, isCurrent, isSameAppearance);
-  }
-
-  private async sendImportResult(
-    action: DialAction<NanDemoSettings>,
-    request: ImportChromeSessionRequest,
-    outcome: "ready" | "failed" | "busy",
-    isCurrent: () => boolean,
-    isSameAppearance: () => boolean,
-  ): Promise<void> {
-    if (!("requestId" in request) || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id) return;
-    try {
-      await streamDeck.ui.sendToPropertyInspector(createImportChromeSessionResult(request.requestId, outcome));
-    } catch {}
+    const result = await handleNanApiKeyMessage(ev.payload, this.dashboard);
+    if (!result || !isCurrent() || !isSameAppearance() || streamDeck.ui.action?.id !== action.id) return;
+    try { await streamDeck.ui.sendToPropertyInspector(result); } catch {}
   }
 
   override onWillDisappear(ev: WillDisappearEvent<NanDemoSettings>): void {
@@ -148,7 +114,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   }
 
   private rotateSettings(settings: NanDemoSettings, state: NanDashboardUsage, ticks: number): NanDemoSettings {
-    const models = state.quota?.models.map(({ model }) => model) ?? [];
+    const models = listNanModels(state);
     if (models.length === 0) return settings;
     const current = resolveNanLiveModel(models, models, settings.model);
     return { ...settings, model: cycleNanLiveModel(models, current, ticks) };

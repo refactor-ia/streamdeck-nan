@@ -1,114 +1,174 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NanDashboardController } from "../src/actions/nan-dashboard-controller.ts";
-import type { BrowserCookieRecord, NanDashboardSessionResult, NanDashboardSnapshotResult } from "../src/providers/nan/nan-dashboard-session-store.ts";
-import type { NanDashboardMetricsSnapshot } from "../src/providers/nan/nan-dashboard-metrics-provider.ts";
-import type { NanDashboardQuota } from "../src/providers/nan/nan-dashboard-quota-provider.ts";
+import { NanApiUsageError, type NanApiUsageSnapshot } from "../src/providers/nan/nan-api-usage-provider.ts";
+import { NanQuotaError, type NanQuota } from "../src/providers/nan/nan-api-quota-provider.ts";
 
-const quota: NanDashboardQuota = {
+const KEY = "sk-sentinel-key";
+const quota: NanQuota = {
   eligibility: "unknown",
   models: [{ model: "capped", tokensUsed: 120, cap: 100, percentage: 120, resetAt: "2026-08-01T00:00:00Z", windowHours: null }],
   uncappedModels: [{ model: "uncapped", tokensUsed: 42, resetAt: null, windowHours: null }],
 };
-const cookie: BrowserCookieRecord = { name: "session", value: "fixture", domain: "nan.builders", hostOnly: false, path: "/", secure: true, expiresAt: null };
+const metrics: NanApiUsageSnapshot = {
+  monthToDate: { totalTokens: 9, byModel: [{ model: "qwen3.6", inputTokens: 4, outputTokens: 5, totalTokens: 9 }] },
+  allTime: { totalTokens: 90, byModel: [] },
+};
 
-class FakeSessions {
-  reads = 0;
-  writes: readonly BrowserCookieRecord[][] = [];
-  result: NanDashboardSessionResult = { state: "needs-import" };
-  dashboardResult?: NanDashboardSnapshotResult;
-  writeResults: NanDashboardSessionResult[] = [];
-  async getCachedDashboard(): Promise<NanDashboardSnapshotResult> { this.reads += 1; return this.dashboardResult ?? this.result; }
-  async validateAndStore(cookies: readonly BrowserCookieRecord[]): Promise<NanDashboardSessionResult> {
-    this.writes = [...this.writes, cookies];
-    return this.writeResults.shift() ?? this.result;
-  }
+class FakeKeys {
+  key: string | undefined = KEY;
+  fail = false;
+  async read(): Promise<string | undefined> { if (this.fail) throw new Error("keychain"); return this.key; }
+  async write(key: string): Promise<void> { if (this.fail) throw new Error(key); this.key = key; }
+  async clear(): Promise<void> { if (this.fail) throw new Error("x"); this.key = undefined; }
 }
-class FakeImporter {
-  calls = 0;
-  candidates: readonly { profileId: string; store: "Network" | "Cookies"; cookies: readonly BrowserCookieRecord[] }[] = [];
-  async importCandidates() { this.calls += 1; return this.candidates; }
+class FakeApis {
+  usageCalls: string[] = [];
+  quotaCalls: string[] = [];
+  usageResult: () => Promise<NanApiUsageSnapshot> = async () => metrics;
+  quotaResult: () => Promise<NanQuota> = async () => quota;
+  modelsCalls: string[] = [];
+  modelsResult: () => Promise<readonly string[]> = async () => ["catalog-model"];
+  models = { getModels: async (key: string) => { this.modelsCalls.push(key); return this.modelsResult(); } };
+  usage = { getUsage: async (key: string) => { this.usageCalls.push(key); return this.usageResult(); } };
+  quota_ = { getQuota: async (key: string) => { this.quotaCalls.push(key); return this.quotaResult(); } };
 }
-function createController(sessions = new FakeSessions(), importer = new FakeImporter()) {
-  return { controller: new NanDashboardController(sessions, importer), sessions, importer };
+function create(overrides: { now?: () => number; scheduler?: FakeWatchScheduler } = {}) {
+  const keys = new FakeKeys();
+  const apis = new FakeApis();
+  const controller = new NanDashboardController({ keys, usage: apis.usage, quota: apis.quota_, models: apis.models, now: overrides.now, scheduler: overrides.scheduler });
+  return { controller, keys, apis };
 }
 
-test("undefined and literal legacy route directly to dashboard without importing or reading a legacy provider", async () => {
-  const { controller, sessions, importer } = createController();
-  sessions.result = { state: "ready", quota };
-
-  assert.equal((await controller.getUsage({})).source, "dashboard");
+test("undefined and literal legacy route directly to the API providers", async () => {
+  const { controller, apis } = create();
+  const first = await controller.getUsage({});
+  assert.equal(first.source, "dashboard");
+  assert.equal(first.quota, quota);
+  assert.equal(first.metrics, metrics);
+  assert.equal(first.error, undefined);
   assert.equal((await controller.getUsage({ source: "legacy" })).quota, quota);
   assert.equal(controller.getCachedUsage({ source: "legacy" }).source, "dashboard");
-  assert.equal(sessions.reads, 2);
-  assert.equal(importer.calls, 0);
+  assert.deepEqual(apis.usageCalls, [KEY, KEY]);
+  assert.deepEqual(apis.quotaCalls, [KEY, KEY]);
 });
 
-test("unknown source is inert and is never coerced into a dashboard cache read", async () => {
-  const { controller, sessions, importer } = createController();
+test("unknown source is inert and never reaches the keychain or the network", async () => {
+  const { controller, apis } = create();
   for (const source of ["other", "LEGACY", null, 0, {}]) {
     assert.deepEqual(await controller.getUsage({ source }), { source: "dashboard", stale: false, error: "invalid-source" });
     assert.deepEqual(controller.getCachedUsage({ source }), { source: "dashboard", stale: false, error: "invalid-source" });
   }
-  assert.equal(sessions.reads, 0);
-  assert.equal(importer.calls, 0);
+  assert.equal(apis.usageCalls.length + apis.quotaCalls.length, 0);
 });
 
-test("explicit import validates isolated candidates sequentially and is the only importer path", async () => {
-  const { controller, sessions, importer } = createController();
-  importer.candidates = [
-    { profileId: "Default", store: "Network", cookies: [cookie] },
-    { profileId: "Profile 1", store: "Cookies", cookies: [{ ...cookie, value: "other" }] },
-  ];
-  sessions.writeResults = [{ state: "needs-import" }, { state: "ready", quota }];
-  assert.equal((await controller.getUsage({ source: "dashboard" })).error, "needs-import");
-  assert.equal(importer.calls, 0);
-  const accepted = await controller.importChromeSession();
-  assert.equal(accepted.state, "ready");
-  assert.equal(sessions.writes.length, 2);
-  assert.equal(importer.calls, 1);
+test("without a stored key nothing is requested and the state asks for a key", async () => {
+  const { controller, keys, apis } = create();
+  keys.key = undefined;
+  assert.deepEqual(await controller.getUsage({}), { source: "dashboard", stale: false, error: "needs-key" });
+  assert.equal(apis.usageCalls.length + apis.quotaCalls.length, 0);
+  keys.fail = true;
+  assert.deepEqual(await controller.getUsage({}), { source: "dashboard", stale: false, error: "keychain-unavailable" });
 });
 
-test("dashboard transient keeps only its own last quota and an account reset clears endpoint snapshots", async () => {
-  const { controller, sessions } = createController();
-  sessions.result = { state: "ready", quota };
-  assert.equal((await controller.getUsage({})).quota, quota);
-  sessions.result = { state: "transient" };
-  assert.equal((await controller.getUsage({})).stale, true);
-  sessions.result = { state: "needs-import" };
-  assert.deepEqual(await controller.getUsage({}), { source: "dashboard", stale: false, error: "needs-import" });
+test("a quota failure hides only the quota; usage keeps working and the error never surfaces", async () => {
+  const { controller, apis } = create();
+  for (const kind of ["auth-rejected", "transport", "schema", "rate-limited"] as const) {
+    apis.quotaResult = async () => { throw new NanQuotaError(kind); };
+    const usage = await controller.getUsage({});
+    assert.equal(usage.quota, undefined, kind);
+    assert.equal(usage.metrics, metrics, kind);
+    assert.equal(usage.error, undefined, kind);
+    assert.equal(usage.metricsError, undefined, kind);
+  }
+  apis.quotaResult = async () => { throw new Error(`boom ${KEY}`); };
+  assert.equal((await controller.getUsage({})).quota, undefined);
 });
 
-test("shared snapshot preserves quota through metrics failure and discards late old-account reads", async () => {
-  const { controller, sessions, importer } = createController();
-  const metrics: NanDashboardMetricsSnapshot = { last24h: { totalTokens: 0, byModel: [] }, last30d: { totalTokens: 0, byModel: [] }, monthToDate: { totalTokens: 9, byModel: [{ model: "qwen3.6", inputTokens: 4, outputTokens: 5, totalTokens: 9 }] }, allTime: { totalTokens: 0, byModel: [] } };
-  sessions.dashboardResult = { state: "ready", quota, metrics };
-  assert.equal((await controller.getUsage({})).metrics, metrics);
-  sessions.dashboardResult = { state: "ready", quota, metricsError: "transient" };
-  assert.equal((await controller.getUsage({})).metricsStale, true);
+test("a usage failure keeps the last metrics as stale and maps typed errors", async () => {
+  const { controller, apis } = create();
+  await controller.getUsage({});
+  apis.usageResult = async () => { throw new NanApiUsageError("transport"); };
+  const transient = await controller.getUsage({});
+  assert.equal(transient.metrics, metrics);
+  assert.equal(transient.metricsStale, true);
+  assert.equal(transient.metricsError, "transient");
+  assert.equal(transient.quota, quota, "quota is independent of the usage endpoint");
+  apis.usageResult = async () => { throw new NanApiUsageError("schema"); };
+  assert.equal((await controller.getUsage({})).metricsError, "schema-invalid");
+  apis.usageResult = async () => metrics;
+  const recovered = await controller.getUsage({});
+  assert.equal(recovered.metricsError, undefined);
+  assert.equal(recovered.metricsStale, false);
+});
 
-  const oldRead = deferred<NanDashboardSnapshotResult>();
-  sessions.getCachedDashboard = async () => oldRead.promise;
+test("a rejected key clears every snapshot and reports the rejection", async () => {
+  const { controller, apis } = create();
+  await controller.getUsage({});
+  apis.usageResult = async () => { throw new NanApiUsageError("auth-rejected"); };
+  assert.deepEqual(await controller.getUsage({}), { source: "dashboard", stale: false, error: "key-rejected" });
+  assert.deepEqual(controller.getCachedUsage({}), { source: "dashboard", stale: false, error: "key-rejected" });
+});
+
+test("429 backs off for Retry-After without another usage request, then resumes", async () => {
+  let now = 1_000_000;
+  const { controller, apis } = create({ now: () => now });
+  await controller.getUsage({});
+  apis.usageResult = async () => { throw new NanApiUsageError("rate-limited", 30_000); };
+  const limited = await controller.getUsage({});
+  assert.equal(limited.metricsError, "transient");
+  assert.equal(limited.metricsStale, true);
+  const calls = apis.usageCalls.length;
+  now += 10_000;
+  const during = await controller.getUsage({});
+  assert.equal(apis.usageCalls.length, calls, "no usage request while backing off");
+  assert.equal(during.metrics, metrics);
+  assert.equal(during.metricsStale, true);
+  apis.usageResult = async () => metrics;
+  now += 25_000;
+  assert.equal((await controller.getUsage({})).metricsError, undefined);
+  assert.equal(apis.usageCalls.length, calls + 1);
+});
+
+test("saving or clearing the key resets snapshots, ignores late old-key reads and refreshes subscribers", async () => {
+  const { controller, keys, apis } = create();
+  const seen: Array<string | undefined> = [];
+  controller.subscribe((usage) => { seen.push(usage.error ?? (usage.quota ? "ok" : "none")); });
+  await controller.getUsage({});
+
+  const late = deferred<NanApiUsageSnapshot>();
+  apis.usageResult = () => late.promise;
   const pending = controller.getUsage({});
-  importer.candidates = [];
-  await controller.importChromeSession();
-  oldRead.resolve({ state: "ready", quota, metrics });
-  assert.deepEqual(await pending, { source: "dashboard", stale: false, error: "needs-import" });
+  await waitFor(() => apis.usageCalls.length === 2);
+  assert.equal(await controller.saveApiKey("sk-new"), "saved");
+  assert.equal(keys.key, "sk-new");
+  late.resolve(metrics);
+  assert.equal((await pending).error, undefined, "a read racing the key change returns the post-change view");
+
+  assert.equal(await controller.clearApiKey(), "cleared");
+  assert.equal(keys.key, undefined);
+  assert.deepEqual(controller.getCachedUsage({}), { source: "dashboard", stale: false, error: "needs-key" });
+  assert.equal(seen.at(-1), "needs-key");
+});
+
+test("key storage failures are reported generically", async () => {
+  const { controller, keys } = create();
+  keys.fail = true;
+  assert.equal(await controller.saveApiKey(KEY), "failed");
+  assert.equal(await controller.clearApiKey(), "failed");
 });
 
 test("dashboard watch retains one shared timer across aggregate consumers", async () => {
-  const sessions = new FakeSessions();
   const scheduler = new FakeWatchScheduler();
-  sessions.dashboardResult = { state: "ready", quota };
-  const controller = new NanDashboardController(sessions, new FakeImporter(), scheduler);
+  const { controller, apis } = create({ scheduler });
   const first = controller.watchDashboard();
-  await waitFor(() => sessions.reads === 1);
+  await waitFor(() => apis.usageCalls.length === 1);
   const second = controller.watchDashboard();
   assert.equal(scheduler.size, 1);
   await Promise.resolve();
   await Promise.resolve();
   scheduler.tick();
-  await waitFor(() => sessions.reads === 2);
+  await waitFor(() => apis.usageCalls.length === 2);
   first();
   assert.equal(scheduler.size, 1);
   second();
@@ -125,3 +185,18 @@ class FakeWatchScheduler {
 }
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } { let resolve!: (value: T) => void; const promise = new Promise<T>((resolver) => { resolve = resolver; }); return { promise, resolve }; }
 async function waitFor(predicate: () => boolean): Promise<void> { while (!predicate()) await new Promise((resolve) => setImmediate(resolve)); }
+
+test("catalog is fetched hourly, survives a failure and never blocks usage", async () => {
+  let now = 0;
+  const { controller, apis } = create({ now: () => now });
+  assert.deepEqual((await controller.getUsage({})).catalog, ["catalog-model"]);
+  await controller.getUsage({});
+  assert.equal(apis.modelsCalls.length, 1, "catalog is cached between reads");
+  now = 61 * 60_000;
+  apis.modelsResult = async () => { throw new Error("down"); };
+  const failed = await controller.getUsage({});
+  assert.equal(apis.modelsCalls.length, 2);
+  assert.deepEqual(failed.catalog, ["catalog-model"]);
+  assert.equal(failed.metrics, metrics);
+  assert.equal(failed.error, undefined);
+});

@@ -39,8 +39,10 @@ export function renderNanModelUsageSvg(state: NanDashboardUsage, settings: NanMo
       : monthlyModel
         ? monthly(monthlyModel, state.metricsStale === true || state.stale)
         : !state.quota && !state.metrics
-          ? unavailable(state.error)
-          : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
+          ? unavailable(state)
+          : state.catalog?.includes(selected)
+            ? noCap(selected, state.metrics ? "0" : "--", state.metricsStale === true || state.stale)
+            : { label: labelLines(selected), primary: "--", secondary: "NOT RETURNED", tertiary: "", status: "NO DATA", statusColor: THEME.warn, accent: THEME.warn, gauge: 0 };
   const foreground = display.foreground ?? THEME.fg;
   const [firstLabel = "", secondLabel = ""] = display.label;
   const border = display.border ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5" fill="none" stroke="${display.border}" stroke-width="3"/>` : "";
@@ -95,7 +97,7 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
     label: labelLines(model.model),
     primary: compact(model.totalTokens),
     secondary: "MONTH TOKENS",
-    tertiary: `MTD · IN ${compact(model.inputTokens)} OUT ${compact(model.outputTokens)}`,
+    tertiary: "NO CAP · MTD",
     status: stale ? "STALE" : "",
     statusColor: THEME.warn,
     accent: stale ? THEME.warn : THEME.violetSoft,
@@ -103,9 +105,15 @@ function monthly(model: { model: string; inputTokens: number; outputTokens: numb
   };
 }
 
-function unavailable(error: NanDashboardUsage["error"]): Display {
-  const status = error === "needs-import" || error === "import-busy" ? "IMPORT" : error === "transient" ? "ERROR" : "NO DATA";
-  const secondary = status === "IMPORT" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
+function noCap(model: string, primary: string, stale: boolean): Display {
+  return { label: labelLines(model), primary, secondary: "MONTH TOKENS", tertiary: "NO CAP", status: stale ? "STALE" : "", statusColor: THEME.warn, accent: stale ? THEME.warn : THEME.muted, gauge: 0 };
+}
+
+function unavailable(state: NanDashboardUsage): Display {
+  const { error } = state;
+  const status = error === "needs-key" || error === "key-rejected" ? "API KEY"
+    : error === "keychain-unavailable" || state.metricsError !== undefined ? "ERROR" : "NO DATA";
+  const secondary = status === "API KEY" ? "USE INSPECTOR" : "DASHBOARD OFFLINE";
   const accent = status === "ERROR" ? THEME.danger : THEME.warn;
   return { label: ["DASHBOARD"], primary: "--", secondary, tertiary: "", status, statusColor: accent, accent, gauge: 0 };
 }

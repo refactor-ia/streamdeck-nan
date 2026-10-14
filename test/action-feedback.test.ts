@@ -56,7 +56,7 @@ test("NaN dashboard feedback preserves raw quota values and distinguishes safe e
   });
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [{ ...quota.models[0], percentage: -5 }] }, stale: false }, {}).indicator, 0);
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: true }, {}).status, "STALE");
-  assert.equal(renderNanDashboardFeedback({ source: "dashboard", stale: false, error: "needs-import" }, {}).status, "IMPORT SESSION");
+  assert.equal(renderNanDashboardFeedback({ source: "dashboard", stale: false, error: "needs-key" }, {}).status, "ADD API KEY");
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [], uncappedModels: [] }, stale: false }, {}).status, "NO QUOTA");
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota: { ...quota, models: [], uncappedModels: [{ model: "uncapped", tokensUsed: 42, resetAt: null, windowHours: null }] }, stale: false }, {}).value, "42 · UNCAPPED");
 });

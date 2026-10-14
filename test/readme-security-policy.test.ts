@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("README documents explicit Chrome dashboard import and retained provider security boundaries", () => {
+test("README documents API key setup and retained provider security boundaries", () => {
   const readme = readFileSync("README.md", "utf8");
 
-  assert.match(readme, /Select that action in the app\. In its configuration panel, click \*\*Import session from Chrome\*\*\./);
-  assert.match(readme, /never reads Chrome or Chrome Safe Storage during appearance, refresh, rotation,\s+settings, or wake handling/);
-  assert.match(readme, /Dashboard session\s+cache data is stored through the dedicated local session store, never in Stream Deck\s+settings/);
-  assert.match(readme, /does not expose cookies, provider URLs, or\s+Safe Storage secrets in settings, feedback, or logs/);
+  assert.match(readme, /In its configuration panel, paste your NaN API key and click \*\*Save API key\*\*\./);
+  assert.match(readme, /API key is stored only in the macOS Keychain, never in Stream Deck\s+settings/);
+  assert.match(readme, /never reads the key during appearance, refresh, rotation,\s+settings, or wake handling beyond the shared usage request/);
+  assert.match(readme, /does not\s+expose the key, provider URLs, or\s+Keychain secrets in settings, feedback, or logs/);
+  assert.doesNotMatch(readme, /Import session from Chrome|Chrome Safe Storage|imported (authenticated )?Chrome session|Google Chrome/);
+  assert.doesNotMatch(readFileSync("PRIVACY.md", "utf8"), /cookie|Chrome|Safe Storage/i);
   assert.doesNotMatch(readme, /private HTTP collector/);
 
   assert.match(readme, /It does not read\s+Claude credentials or call a private usage endpoint/);

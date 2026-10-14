@@ -14,8 +14,8 @@ See your NaN account's usage limits and model usage on Stream Deck and Stream De
 
 ## Primary Features
 
-- **NaN Dashboard quota:** explicitly import an authenticated Chrome session from NaN Usage, NaN Model Usage, NaN Total Tokens, or NaN Monthly Tokens, then view quota, reset windows, and safe stale-state feedback.
-- **NaN actions:** use a keypad launcher, per-model usage, all-time tokens, or month-to-date tokens without exposing session data in settings.
+- **NaN usage and quota:** save your personal NaN API key from NaN Usage, NaN Model Usage, NaN Total Tokens, or NaN Monthly Tokens, then view quota, reset windows, month-to-date and all-time tokens.
+- **NaN actions:** use a keypad launcher, per-model usage, all-time tokens, or month-to-date tokens without exposing your API key in settings.
 - **External CLI dials:** optionally view local Claude Code, Codex, and experimental Grok Build usage through their installed, signed-in CLIs.
 
 ## Install on Your Mac
@@ -26,8 +26,8 @@ See your NaN account's usage limits and model usage on Stream Deck and Stream De
 
 - A Mac running **macOS 13 or later**. Windows and Linux are not supported.
 - The **Elgato Stream Deck app, version 7.1 or later**, installed on your Mac.
-- A Stream Deck device with a free action position. **NaN Usage** requires Stream Deck+, while **NaN Model Usage**, **NaN Total Tokens**, and **NaN Monthly Tokens** can import a session from a regular keypad key on supported Stream Deck devices.
-- **Google Chrome**, signed in to your NaN account with your NaN dashboard open.
+- A Stream Deck device with a free action position. **NaN Usage** requires Stream Deck+, while **NaN Model Usage**, **NaN Total Tokens**, and **NaN Monthly Tokens** can save your API key from a regular keypad key on supported Stream Deck devices.
+- A **NaN API key** from your NaN account.
 
 ### 1. Download the installer
 
@@ -43,23 +43,23 @@ Alternatively, open the [latest release](https://github.com/refactor-ia/streamde
 2. Stream Deck should open. Confirm its installation or update prompt.
 3. Look for the **NaN** actions in the action list in Stream Deck.
 
-The plugin is installed, but it still needs access to your NaN session before it can display usage or list models.
+The plugin is installed, but it still needs your NaN API key before it can display usage or list models.
 
 > **macOS security notice:** this plugin is distributed without Apple signing or notarization. If macOS blocks installation, stop and [report the exact message](https://github.com/refactor-ia/streamdeck-nan/issues). Do not disable system security protections. Opening the download alone does not mean installation has completed: confirm the Stream Deck prompt.
 
 ### 3. Connect your NaN account
 
-1. In **Google Chrome**, make sure you are signed in to NaN and can view your dashboard.
+1. Copy your personal API key from your NaN account.
 2. In the **Stream Deck app**, drag **NaN Usage**, **NaN Model Usage**, **NaN Total Tokens**, or **NaN Monthly Tokens** onto a compatible position.
-3. Select that action in the app. In its configuration panel, click **Import session from Chrome**.
+3. Select that action in the app. In its configuration panel, paste your NaN API key and click **Save API key**.
 4. Wait for usage data to appear. Touch the NaN Usage dial or press a keypad action to refresh it.
 
 <p align="center">
-  <img src="docs/screenshots/nan-property-inspector.png" alt="NaN Usage configuration panel with the Import session from Chrome button" width="520">
+  <img src="docs/screenshots/nan-property-inspector.png" alt="NaN Usage configuration panel" width="520">
 </p>
-<p align="center"><em>The configuration panel imports your session only when you click the button.</em></p>
+<p align="center"><em>The configuration panel stores your key only when you click Save API key.</em></p>
 
-You do not need to copy a cookie, token, or API key. Session import happens only when you request it; installing the plugin does not automatically sign you in. The configuration panel disables **Import session from Chrome** while it waits, then shows a safe success, retry, or already-in-progress message. If it is still waiting after two minutes, the panel lets you retry; that message does not cancel the import already running in the plugin.
+Your API key is stored only in the macOS Keychain, never in Stream Deck settings, and the field is cleared once it is saved. Use **Remove key** to delete it. The panel disables its buttons while it waits, then shows a safe success or retry message. If it is still waiting after fifteen seconds, the panel lets you retry.
 
 <p align="center">
   <img src="docs/screenshots/nan-dial-actions.png" alt="NaN dial actions listed in the Stream Deck+ app" width="520">
@@ -70,10 +70,10 @@ You do not need to copy a cookie, token, or API key. Session import happens only
 
 1. Drag **NaN Model Usage** onto a regular key position in the Stream Deck app.
 2. Select the new key and click **Refresh models** in its configuration panel.
-3. Choose a model from the **Model** dropdown. The list comes from your NaN account, so connect your session first.
+3. Choose a model from the **Model** dropdown. The list comes from your NaN account, so save your API key first.
 4. Press the physical key to refresh its usage.
 
-You can also add **NaN Total Tokens** or **NaN Monthly Tokens** to regular keys. **NaN Dashboard** only opens the dashboard in your browser; it does not connect your session or load usage data.
+You can also add **NaN Total Tokens** or **NaN Monthly Tokens** to regular keys. **NaN Dashboard** only opens the dashboard in your browser; it does not use your API key or load usage data.
 
 <p align="center">
   <img src="docs/screenshots/nan-keypad-actions.png" alt="NaN keypad actions listed in the Stream Deck app" width="520">
@@ -82,7 +82,7 @@ You can also add **NaN Total Tokens** or **NaN Monthly Tokens** to regular keys.
 
 ### Updating an existing installation
 
-Download and open the latest installer, then confirm the update in Stream Deck. Updating from **v1.0.4 to v1.0.5** keeps the same action identifiers; you do not need to recreate those buttons or delete your saved NaN session for this fix.
+Download and open the latest installer, then confirm the update in Stream Deck. Updating from **v1.0.4 to v1.0.5** keeps the same action identifiers; you do not need to recreate those buttons.
 
 Action identifiers are stable by contract. The NaN Usage dial keeps its historical `com.refactor-ia.nan.nan-demo` UUID so existing configured buttons keep working after the demo-to-usage migration; contract tests pin it, so it must not be renamed.
 
@@ -90,45 +90,39 @@ If you are upgrading from **v1.0.3 or earlier**, add the new actions again: v1.0
 
 ### If something does not work
 
-- **The model list is empty:** first import a session from the configuration panel of **NaN Usage**, **NaN Model Usage**, **NaN Total Tokens**, or **NaN Monthly Tokens**. If the session is already connected, click **Refresh models** on the model button instead of importing it again. Installing the plugin or opening the dashboard alone is not enough.
-- **The import button does nothing, or Stream Deck says the plugin is unstable:** make sure you installed **v1.0.5 or later**. Earlier standalone packages omitted a required runtime dependency; v1.0.5 fixes that startup problem.
-- **It still does not work:** [open an issue](https://github.com/refactor-ia/streamdeck-nan/issues) with your plugin, macOS, and Stream Deck app versions, the action you selected, and any visible error message. Never include cookies, tokens, passwords, or private account data.
+- **The model list is empty:** first save your API key from the configuration panel of **NaN Usage**, **NaN Model Usage**, **NaN Total Tokens**, or **NaN Monthly Tokens**. If the key is already saved, click **Refresh models** on the model button instead of saving it again.
+- **Stream Deck says the plugin is unstable:** make sure you installed **v1.0.5 or later**. Earlier standalone packages omitted a required runtime dependency; v1.0.5 fixes that startup problem.
+- **It still does not work:** [open an issue](https://github.com/refactor-ia/streamdeck-nan/issues) with your plugin, macOS, and Stream Deck app versions, the action you selected, and any visible error message. Never include your API key, passwords, or private account data.
 
-Keep the saved session unless there is a specific reason to replace it; an empty model list alone does not identify the cause.
-
-### Dashboard recovery
-
-In published **v1.0.7**, the selected action's configuration panel has no import progress or result feedback. On `main` (for an upcoming release), it will show the feedback below. In either version, an import starts only when you explicitly click **Import session from Chrome**.
+### Status recovery
 
 **Dial recovery vocabulary** — **NaN Usage** on Stream Deck+ is the dial; keypad actions do not expose its full status vocabulary.
 
 | Where and message | What to do |
 | --- | --- |
-| NaN Usage dial — **IMPORT SESSION** | Select **NaN Usage** on a dial or one of the three supported data-display keypad actions described above, then explicitly click **Import session from Chrome** in its configuration panel. |
-| NaN Usage dial — **IMPORT BUSY** | Wait for the current import to finish, then refresh or retry. Do not start concurrent imports. |
-| NaN Usage dial — **IMPORT UNAVAILABLE** | Try the explicit import once more from the configuration panel. If it remains unavailable, report the visible message and versions; this message does not identify a specific browser condition. |
-| NaN Usage dial — **KEYCHAIN UNAVAILABLE** | Allow the applicable macOS Keychain permission when prompted, then retry. Do not disable macOS security or delete credentials to work around it. |
-| NaN Usage dial — **SESSION RESET FAILED** | Retry the refresh or explicit import. If it persists, report it; do not delete credentials as a repair step. |
-| NaN Usage dial — **QUOTA INVALID** | Refresh once. If it remains, report it as a dashboard-response/schema problem rather than reimporting or repairing credentials. |
-| NaN Usage dial — **DASHBOARD UNAVAILABLE** | Refresh later. A temporary dashboard failure can be retried. |
-| NaN Usage dial — **STALE** | The displayed quota is a previous value, not current data. Refresh before relying on it. |
-| NaN Total Tokens or NaN Monthly Tokens key — **METRICS ERROR** | Refresh later. Quota data can still be valid when metrics are unavailable. |
+| NaN Usage dial — **ADD API KEY** | Select **NaN Usage** on a dial or one of the three supported data-display keypad actions, paste your key, and click **Save API key** in its configuration panel. |
+| NaN Usage dial — **KEY REJECTED** | NaN rejected the saved key. Save a current key from your NaN account. |
+| NaN Usage dial — **KEYCHAIN UNAVAILABLE** | Allow the applicable macOS Keychain permission when prompted, then retry. Do not disable macOS security to work around it. |
+| NaN Usage dial — **DASHBOARD UNAVAILABLE** | Refresh later. A temporary NaN failure or rate limit can be retried. |
+| NaN Usage dial — **NO QUOTA** | The quota service returned nothing usable. Usage keys can still work; the quota view hides itself without raising an error. |
+| NaN Total Tokens or NaN Monthly Tokens key — **METRICS ERROR** | Refresh later. Quota data can still be valid when usage totals are unavailable. |
 | NaN Model Usage key — combined **NOT RETURNED** / **NO DATA** display | Click **Refresh models**, then select a model returned by the list. |
 | Keypad action — **NO DATA** or **DASHBOARD OFFLINE** | These messages can combine several underlying conditions and do not uniquely diagnose the problem. Use the relevant recovery step above or report the visible message. |
 
-**Upcoming property-inspector feedback** — While an import is pending, its button is disabled.
+**Configuration panel feedback**
 
 | Visible message | Meaning and next step |
 | --- | --- |
-| Importing session from Chrome. Please wait. | The requested import is pending. |
-| Session imported. Usage will refresh shortly. | The session was imported. |
-| Import could not be completed. Check Chrome, then try again. | Retry after checking Chrome. |
-| Another import is already in progress. Please wait and try again. | Wait, then try again. |
-| Still waiting for the plugin. You can retry when ready. | The two-minute inspector watchdog has elapsed; it does not cancel any backend import. |
+| Saving API key. Please wait. | The request is pending. |
+| API key saved. Usage will refresh shortly. | The key was stored in the Keychain. |
+| API key removed. | The key was deleted from the Keychain. |
+| That does not look like a valid API key. | Paste the key again without spaces or quotes. |
+| The key could not be saved. Try again. | Retry after checking Keychain access. |
+| Still waiting for the plugin. You can retry when ready. | The inspector watchdog has elapsed. |
 | Unable to contact the plugin. Reopen this action and try again. | Reopen this action, then try again. |
 | Connection closed. Reopen this action to try again. | Reopen this action, then try again. |
 
-When reporting an issue, include the plugin and Stream Deck versions, the action, and the visible message. Do not include cookies, tokens, passwords, account data, or raw diagnostics.
+When reporting an issue, include the plugin and Stream Deck versions, the action, and the visible message. Do not include your API key, passwords, account data, or raw diagnostics.
 
 ## External Integrations and Requirements
 
@@ -194,11 +188,10 @@ controls. The final validated-path-to-spawn interval is a same-user filesystem
 residual shared by these CLI launches; it is not an atomic execution guarantee.
 Codex authentication remains inside the local Codex CLI and its app server.
 Experimental Grok authentication also remains inside the local Grok Build CLI;
-the plugin sends only ACP initialization and billing requests. Dashboard session
-cache data is stored through the dedicated local session store, never in Stream Deck
-settings. The Chrome importer is invoked only by the inspector button, validates one
-profile/store candidate at a time, and does not expose cookies, provider URLs, or
-Safe Storage secrets in settings, feedback, or logs.
+the plugin sends only ACP initialization and billing requests. The NaN API key is
+stored only in the macOS Keychain, never in Stream Deck settings. The plugin sends it
+only as a bearer header to two fixed NaN origins, refuses redirects, and does not
+expose the key, provider URLs, or Keychain secrets in settings, feedback, or logs.
 
 Tokens, authorization headers, raw provider payloads, and CLI diagnostics are
 not written to logs, settings, action feedback, or the property inspector. Usage
@@ -213,21 +206,17 @@ described in [PRIVACY.md](PRIVACY.md).
 
 ## Advanced Architecture and Status
 
-The `com.refactor-ia.nan` migration recreates all eight Stream Deck buttons, so users add the new actions again after installing version 1.0.4. Existing NaN session compatibility is retained internally only; this documentation does not expose session or credential identities.
+The `com.refactor-ia.nan` migration recreates all eight Stream Deck buttons, so users add the new actions again after installing version 1.0.4. 
 
 The generated, tracked bundle at `com.refactor-ia.nan.sdPlugin/bin/plugin.js` keeps the plugin directory self-contained.
 
-### Dashboard Behavior Details
+### NaN Data Behavior Details
 
-The NaN Usage dial and the NaN Model Usage, NaN Total Tokens, and NaN Monthly Tokens keys read dashboard data from the explicitly imported authenticated Chrome session. The plugin never reads Chrome or Chrome Safe Storage during appearance, refresh, rotation, settings, or wake handling. Import occurs only after an explicit configuration-panel click on one of those four actions. Dashboard values show provider quota (`used / cap`), raw percentage, and the API-provided reset or rolling window. A saved `legacy` source is migrated to `dashboard` once when its dial appears; all other settings and model IDs are preserved verbatim. Touching the dial refreshes its data; rotating it selects an API-returned capped model. **NaN Model Usage** selects one API-returned capped or uncapped model per key and refreshes the shared dashboard snapshot when pressed. A transient dashboard failure keeps only the last dashboard quota as `STALE`; a rejected session returns to import onboarding without showing a prior account's quota.
+The NaN Usage dial and the NaN Model Usage, NaN Total Tokens, and NaN Monthly Tokens keys read data with your saved NaN API key. The plugin never reads the key during appearance, refresh, rotation, settings, or wake handling beyond the shared usage request. Month-to-date per-model tokens and all-time totals come from one `GET /v1/usage` request per refresh (30 requests per minute allowed; a `429` is honored through `Retry-After`). Quota (`used / cap`, raw percentage, reset or rolling window) comes from the NaN dashboard quota service, which is not part of the published API: it is requested from a fixed origin with strict schema validation, and any failure hides only the quota while usage keeps working. A saved `legacy` source is migrated to `dashboard` once when its dial appears; all other settings and model IDs are preserved verbatim. Touching the dial refreshes its data; rotating it selects an API-returned capped model. **NaN Model Usage** selects one API-returned capped or uncapped model per key and refreshes the shared snapshot when pressed. A rejected key returns to onboarding without showing a prior account's data.
 
-### NaN Dashboard Validation Status
+### NaN Validation Status
 
-The direct dashboard flow has focused mocked tests only. It still requires human
-validation with a real authenticated Chrome profile and normal macOS permission
-prompts, followed by the project's release-process validation. This checkout does not
-claim production readiness, perform signing, restart Stream Deck, or deploy the
-plugin.
+The API key flow is covered by focused mocked tests and was validated manually on a real Stream Deck with a real API key, including the quota service accepting the key as a bearer credential. If the quota service ever rejects the key, only the quota view is hidden; usage keeps working. A release still requires the project's release-process validation. This checkout does not claim production readiness, perform signing, restart Stream Deck, or deploy the plugin.
 
 ### Platform Support
 

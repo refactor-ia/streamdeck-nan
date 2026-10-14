@@ -14,13 +14,13 @@ test("README documents the experimental local-CLI-only Grok boundary", () => {
   assert.deepEqual(GROK_ACP_METHODS, ["initialize", "x.ai/billing"]);
 });
 
-test("NaN surfaces describe dashboard import and a straightforward old-profile migration", () => {
+test("NaN surfaces describe API key setup and a straightforward old-profile migration", () => {
   const inspector = read("com.refactor-ia.nan.sdPlugin/ui/property-inspector.html");
   const readme = read("README.md");
   const action = manifest.Actions.find(({ UUID }: { UUID: string }) => UUID === "com.refactor-ia.nan.nan-demo");
 
   assert.match(action.Tooltip, /NaN/i);
-  assert.match(inspector, /Import session from Chrome/);
+  assert.match(inspector, /Save API key/);
   assert.doesNotMatch(inspector, /Legacy collector|nanSource/i);
   assert.match(readme, /^# NaN Dashboard for Stream Deck and Stream Deck\+\n\nSee your NaN account's usage limits and model usage on Stream Deck and Stream Deck\+\. Keypad buttons work on both devices; dials require Stream Deck\+\. Optional integrations also show usage from Claude Code, Codex, and experimental Grok\./);
   assert.match(readme, /saved `legacy`[\s\S]*source is migrated to `dashboard` once/i);

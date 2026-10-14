@@ -16,10 +16,10 @@ NaN Dashboard brings your NaN AI usage to Stream Deck. See your remaining quota 
 
 - **NaN Usage dial (Stream Deck+):** rotate/touch to refresh your quota; high-contrast warning levels when you run low.
 - **NaN Model Usage / Total Tokens / Monthly Tokens (Stream Deck & Stream Deck+):** live keypad tiles that refresh automatically.
-- **Secure session import:** click **Import session from Chrome** once in the action's configuration panel; your session is validated and stored in the macOS Keychain. Nothing is sent anywhere except the NaN Dashboard API, with your own session.
+- **Secure API key:** paste your NaN API key once in the action's configuration panel; it is stored in the macOS Keychain. Nothing is sent anywhere except NaN, with your own key.
 - **Bonus monitors (no NaN account needed):** Claude Code usage and OpenAI Codex usage dials. A Grok monitor is experimental.
 
-Requires macOS 13+ and the Stream Deck 7.1+ app. NaN account and Chrome required for NaN actions. The plugin is open source: <https://github.com/refactor-ia/streamdeck-nan>.
+Requires macOS 13+ and the Stream Deck 7.1+ app. NaN account and API key required for NaN actions. The plugin is open source: <https://github.com/refactor-ia/streamdeck-nan>.
 
 ## Keywords / search terms
 
@@ -31,7 +31,7 @@ NaN, AI usage, quota, tokens, Claude, Codex, Grok, Stream Deck+
 | --- | --- | --- |
 | App icon (1024×1024) | Render at upload time from `design-assets/nan-brand/source/nan-isotipo-color.svg` | Source of truth in repo |
 | Gallery (upload in this order) | `docs/gallery/nan-hardware-hero.png`, `nan-hardware-desk.png` (hardware photos), then `nan-dashboard-overview.png`, `nan-usage-detail.png`, `nan-setup.png` (app compositions), then the demo MP4 (1920×1080) | Photos done 2026-09-16 |
-| Demo video | Short screen + hardware recording: add action, import session from Chrome, dial/keys update, touch to refresh. Emailed to maker@elgato.com | Sent 2026-09-16 |
+| Demo video | Short screen + hardware recording: add action, save API key, dial/keys update, touch to refresh. Emailed to maker@elgato.com | Sent 2026-09-16 |
 | Category icon (in-manifest, white mono SVG) | `imgs/plugin/nan-category.svg` | Done |
 | Action icons (in-manifest, white mono SVG) | `imgs/actions/*/**.svg`, one per action on the 100×100 grid; the dashboard launcher keeps its PNG isotype | Done |
 
@@ -46,7 +46,7 @@ The Maker Console rejects submissions with `SDKVersion: 2` and DRM off. Per offi
 
 ## Open portal questions (verify at submission)
 
-- Exact review checklist and privacy requirements for plugins that read browser cookies (declare Chrome access explicitly and link the privacy policy).
+- Exact review checklist and privacy requirements for plugins that store a user API key (link the privacy policy).
 - Whether unsigned bundles are accepted for review the same way direct distribution is, or whether signing (#14) should land first.
 - Screenshot dimensions/format required by the portal.
 

@@ -4,8 +4,6 @@ import { renderNanMetricsUsageSvg } from "../src/actions/nan-metrics-feedback.ts
 import type { NanDashboardUsage } from "../src/actions/nan-dashboard-controller.ts";
 
 const metrics = {
-  last24h: { totalTokens: 0, byModel: [] },
-  last30d: { totalTokens: 0, byModel: [] },
   monthToDate: { totalTokens: 0, byModel: [{ model: "rows-do-not-add-up", inputTokens: 40, outputTokens: 2, totalTokens: 42 }] },
   allTime: { totalTokens: 1_234_567, byModel: [{ model: "rows-do-not-add-up", inputTokens: 5, outputTokens: 4, totalTokens: 9 }], cachedAt: "2026-08-01T00:00:00Z" },
 };
