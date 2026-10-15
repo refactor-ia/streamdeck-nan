@@ -241,3 +241,35 @@ test("a failed or empty history read falls back to the pace view, with no chart 
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(feedbacks.some((payload) => (payload as { demo?: string }).demo === "HISTORY"), false, "an empty history is not shown as a chart either");
 });
+
+test("pressing the dial toggles the view; a long press refreshes instead", async (t) => {
+  const dashboard = new ImportDashboard();
+  const layouts: string[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "press",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async () => undefined,
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+
+  const realNow = Date.now;
+  const press = (releasedAt: number) => {
+    Date.now = () => 1_000;
+    void subject.onDialDown({ action: dial, payload: { settings: { ...current } } } as never);
+    Date.now = () => releasedAt;
+    return subject.onDialUp({ action: dial, payload: { settings: { ...current } } } as never).finally(() => { Date.now = realNow; });
+  };
+
+  await press(1_100);
+  assert.equal(current.view, "history", "a quick press toggles to history");
+  await press(1_100);
+  assert.equal(current.view, "pace", "a quick press toggles back");
+  await press(1_000 + 800);
+  assert.equal(current.view, "pace", "a long press does not toggle");
+});
