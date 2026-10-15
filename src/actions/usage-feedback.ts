@@ -4,6 +4,7 @@ import { levelColor } from "../branding/tokens.js";
 import { listNanModels, resolveNanLiveModel } from "./nan-live-model.js";
 import { projectMonthlyPace, type NanPaceProjection } from "./nan-pace-projection.js";
 import type { NanModelQuota } from "../providers/nan/nan-api-quota-provider.js";
+import type { NanDailyTotal } from "./nan-usage-history.js";
 
 /** Bar item value with a per-update fill color (Stream Deck bar layout item override). */
 export interface BarFeedback {
@@ -110,6 +111,52 @@ function formatPace(pace: NanPaceProjection): string {
     case "capped": return "CAP REACHED";
     case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
   }
+}
+
+/**
+ * 30-day usage history chart: 184x64 SVG with one 4px bar per day, scaled to the
+ * busiest day, grounded by a baseline. Zero days produce no bar.
+ */
+const CHART_BAR_WIDTH = 4;
+const CHART_PITCH = 6;
+const CHART_X0 = 2;
+const CHART_BASE_Y = 62;
+const CHART_MAX_HEIGHT = 60;
+const CHART_BAR_COLOR = "#7127ff";
+
+export function renderNanUsageHistoryChart(totals: readonly NanDailyTotal[]): string {
+  const max = Math.max(...totals.map((entry) => entry.totalTokens), 0);
+  const bars = totals
+    .map((entry, index) => {
+      if (entry.totalTokens <= 0 || max <= 0) return "";
+      const height = Math.max(1, Math.round(entry.totalTokens / max * CHART_MAX_HEIGHT));
+      const x = CHART_X0 + index * CHART_PITCH;
+      return `<rect x="${x}" y="${CHART_BASE_Y - height}" width="${CHART_BAR_WIDTH}" height="${height}" fill="${CHART_BAR_COLOR}"/>`;
+    })
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="184" height="64" viewBox="0 0 184 64">`
+    + `<line x1="0" y1="${CHART_BASE_Y + 0.5}" x2="184" y2="${CHART_BASE_Y + 0.5}" stroke="#9a8fb8" stroke-width="1"/>`
+    + bars
+    + `</svg>`;
+}
+
+export interface NanHistoryFeedback {
+  readonly [key: string]: FeedbackValue;
+  readonly title: "NaN";
+  readonly demo: "HISTORY";
+  readonly model: string;
+  readonly chart: string;
+  readonly status: "";
+}
+
+export function renderNanUsageHistoryFeedback(totals: readonly NanDailyTotal[], model: string | undefined): NanHistoryFeedback {
+  return Object.freeze({
+    title: "NaN" as const,
+    demo: "HISTORY" as const,
+    model: model ?? "--",
+    chart: `data:image/svg+xml;base64,${Buffer.from(renderNanUsageHistoryChart(totals), "utf8").toString("base64")}`,
+    status: "" as const,
+  });
 }
 
 function dashboardStatus(state: NanDashboardUsage): NanDashboardFeedback["status"] {
