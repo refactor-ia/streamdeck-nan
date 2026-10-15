@@ -52,7 +52,7 @@ The plugin is installed, but it still needs your NaN API key before it can displ
 1. Copy your personal API key from your NaN account.
 2. In the **Stream Deck app**, drag **NaN Usage**, **NaN Model Usage**, **NaN Total Tokens**, or **NaN Monthly Tokens** onto a compatible position.
 3. Select that action in the app. In its configuration panel, paste your NaN API key and click **Save API key**.
-4. Wait for usage data to appear. Touch the NaN Usage dial or press a keypad action to refresh it.
+4. Wait for usage data to appear. Press a keypad action for a fresh read. On the NaN Usage dial, tap the screen to toggle between the pace view and a 30-day usage history chart of the selected model (hold to refresh, rotate to change model).
 
 <p align="center">
   <img src="docs/screenshots/nan-property-inspector.png" alt="NaN Usage configuration panel" width="520">
