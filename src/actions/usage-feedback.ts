@@ -106,7 +106,7 @@ function monthlyDetail(state: NanDashboardUsage, model: NanModelQuota, now: numb
 
 function formatPace(pace: NanPaceProjection): string {
   switch (pace.kind) {
-    case "cap-date": return `CAP ${formatResetDate(pace.at)}`;
+    case "cap-date": return `CAP ~${formatResetDate(pace.at)}`;
     case "capped": return "CAP REACHED";
     case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
   }

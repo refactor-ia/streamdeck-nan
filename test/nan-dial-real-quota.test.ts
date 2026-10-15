@@ -56,8 +56,8 @@ const paceQuota = (tokensUsed: number, extra: Record<string, unknown> = {}) => (
 const dial = (quota: ReturnType<typeof paceQuota>, now: number, stale = false) =>
   renderNanDashboardFeedback({ source: "dashboard", quota, stale }, {}, now);
 
-test("dial shows the projected cap date when the cap is hit before reset", () => {
-  assert.equal(dial(paceQuota(400), octFirst + 10 * DAY).unit, "40% · CAP OCT 26");
+test("dial marks the projected cap date as an estimate when the cap is hit before reset", () => {
+  assert.equal(dial(paceQuota(400), octFirst + 10 * DAY).unit, "40% · CAP ~OCT 26");
 });
 
 test("dial shows the projected percentage at reset when the cap is not reached", () => {
