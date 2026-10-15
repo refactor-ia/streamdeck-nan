@@ -10151,7 +10151,8 @@ function formatPace(pace) {
     switch (pace.kind) {
         case "cap-date": return `CAP ${formatResetDate(pace.at)}`;
         case "capped": return "CAP REACHED";
-        case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
+        // A rounded projection of 0% would read as "zero by reset"; any nonzero rate shows <1%.
+        case "period-end-percent": return pace.percent === 0 ? "<1% AT RESET" : `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
     }
 }
 /**
@@ -12480,8 +12481,8 @@ let NanDemoUsage = (() => {
         historyRows = new Map();
         historyLoading = new Set();
         dashboard;
-        constructor(dashboard = new NanDashboardController()) {
-            super();
+        constructor(dashboard = new NanDashboardController(), scheduler) {
+            super(scheduler);
             this.dashboard = dashboard;
         }
         async onWillAppear(ev) {

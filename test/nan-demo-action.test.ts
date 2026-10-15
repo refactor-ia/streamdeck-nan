@@ -296,3 +296,42 @@ test("a dial restored in the history view loads its history on appearance", asyn
 
   assert.equal((feedbacks.at(-1) as { demo?: string }).demo, "HISTORY", "the restored dial renders the chart without needing a toggle");
 });
+
+test("the dial arms its periodic refresh timer on appearance, re-renders cache-only on tick, and clears it on disappear", async (t) => {
+  const intervals: { callback: () => void; ms: number }[] = [];
+  const cleared: ReturnType<typeof setInterval>[] = [];
+  const scheduler = {
+    setInterval: (callback: () => void, ms: number) => { const handle = { fake: true } as unknown as ReturnType<typeof setInterval>; intervals.push({ callback, ms }); return handle; },
+    clearInterval: (handle: ReturnType<typeof setInterval>) => cleared.push(handle),
+  };
+  let getUsageCalls = 0;
+  let lastOptions: { cacheWhileWatched?: boolean } | undefined;
+  const dashboard = new class extends ImportDashboard {
+    override async getUsage(_settings?: unknown, options?: { cacheWhileWatched?: boolean }): Promise<{ source: "dashboard"; stale: false }> {
+      getUsageCalls += 1;
+      lastOptions = options;
+      return { source: "dashboard", stale: false };
+    }
+  }();
+  const dial = {
+    id: "timer",
+    isDial: () => true,
+    getSettings: async () => ({ autoRefresh: true }),
+    setFeedback: async () => undefined,
+    setSettings: async () => undefined,
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard, scheduler);
+  await subject.onWillAppear({ action: dial, payload: { settings: { autoRefresh: true } } } as never);
+
+  assert.equal(intervals.length, 1, "appearance arms exactly one timer");
+  assert.equal(intervals[0]!.ms, 30_000, "the default tick is 30s");
+  const baseline = getUsageCalls;
+  intervals[0]!.callback();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(getUsageCalls, baseline + 1, "a tick re-renders the dial");
+  assert.equal(lastOptions?.cacheWhileWatched, true, "a tick is display-only while the shared lease is active");
+
+  subject.onWillDisappear({ action: dial } as never);
+  assert.equal(cleared.length >= 1, true, "disappearance clears the timer");
+});
