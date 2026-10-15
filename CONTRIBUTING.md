@@ -51,4 +51,4 @@ MIT License.
 
 The root package is marked `private: true` and is not published to npm.
 The repository boundaries are plugin source (`src/`), native helper code (`native/`), build and release scripts (`scripts/`), and tests (`test/` and `scripts/*.test.mjs`).
-The repository lives under the `refactor-ia` GitHub organization; the npm package is unscoped (`streamdeck-nan`) and marked `private: true` for internal development. The `com.barbatdev.ai-usage.nan-session` Keychain identity is a historical compatibility name pinned by contract tests and must not be renamed.
+The repository lives under the `refactor-ia` GitHub organization; the npm package is unscoped (`streamdeck-nan`) and marked `private: true` for internal development. The `com.barbatdev.ai-usage.nan-session` Keychain identity is a historical compatibility name pinned by contract tests and must not be renamed.<!-- canary fleet 2026-10-15T12:55:09Z -->
