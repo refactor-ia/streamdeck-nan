@@ -18,7 +18,8 @@ import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 export type NanDemoSettings = RefreshSettings & Partial<{
   model: string;
   source: "dashboard" | "legacy" | string;
-}>;
+  view: "pace" | "history";
+}>;;
 
 @action({ UUID: "com.refactor-ia.nan.nan-demo" })
 export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
@@ -44,7 +45,25 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
 
   override async onTouchTap(ev: TouchTapEvent<NanDemoSettings>): Promise<void> {
     if (!ev.action.isDial()) return;
-    await this.refresh(ev.action);
+    // A hold stays an explicit fresh read; a short tap toggles pace/history using the cached snapshot.
+    if (ev.payload.hold) { await this.refresh(ev.action); return; }
+    const isCurrent = this.lifecycleGuard(ev.action);
+    const isSameAppearance = this.appearanceGuard(ev.action);
+    if (!isCurrent()) return;
+    const currentSettings = this.desiredSettings.get(ev.action.id) ?? ev.payload.settings;
+    const settings: NanDemoSettings = { ...currentSettings, view: currentSettings.view === "history" ? "pace" : "history" };
+    const selectionGeneration = this.recordSelection(ev.action.id, settings);
+    const persisted = await persistLatestNanSettings(
+      selectionGeneration,
+      settings,
+      () => this.latestSelection(ev.action.id, settings),
+      (latest) => this.writeSettings(ev.action, latest),
+      isCurrent,
+      isSameAppearance,
+    );
+    if (isCurrent() && this.selectionGeneration(ev.action.id) === selectionGeneration) {
+      await this.render(ev.action, this.dashboard.getCachedUsage(persisted), persisted);
+    }
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<NanDemoSettings>): Promise<void> {

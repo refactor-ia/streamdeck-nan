@@ -121,3 +121,41 @@ function replaceUi(t: test.TestContext, ui: object): void {
   Object.defineProperty(streamDeck, "ui", { configurable: true, value: ui });
   t.after(() => Object.defineProperty(streamDeck, "ui", descriptor!));
 }
+
+test("a short tap toggles the dial view and persists it; a hold keeps the fresh read", async (t) => {
+  let usageReads = 0;
+  const dashboard = new class extends ImportDashboard {
+    override async getUsage(): Promise<{ source: "dashboard"; stale: false }> { usageReads += 1; return { source: "dashboard", stale: false }; }
+  }();
+  const written: unknown[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false };
+  const dial = {
+    id: "toggle",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setFeedback: async () => undefined,
+    setSettings: async (settings: Record<string, unknown>) => { written.push(settings); current = { ...settings }; },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  const baselineReads = usageReads;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  assert.equal(current.view, "history", "first short tap switches to history");
+  await tap(false);
+  assert.equal(current.view, "pace", "second short tap switches back to pace");
+  assert.equal(usageReads, baselineReads, "toggling uses the cached snapshot, not a fresh read");
+  assert.equal(written.length, 2, "each toggle is persisted");
+
+  current.view = "history";
+  await subject.onDidReceiveSettings({ action: dial, payload: { settings: { ...current } } } as never);
+  await tap(false);
+  assert.equal(current.view, "pace", "toggling works from a restored history view");
+
+  const views = [current.view];
+  await tap(true);
+  assert.deepEqual(views, ["pace"], "a hold does not change the view");
+  assert.equal(usageReads, baselineReads + 1, "a hold keeps the explicit fresh read");
+});
