@@ -87,3 +87,27 @@ test("dial keeps the rolling window text for models with rolling usage", () => {
 test("dial shows <1% AT RESET when the projection rounds to zero", () => {
   assert.equal(dial(paceQuota(1), octFirst + 10 * DAY).unit, "0.1% · <1% AT RESET");
 });
+
+test("a monthly model without resetAt shows PER MODEL and no projection", () => {
+  assert.equal(dial(paceQuota(400, { resetAt: null }), octFirst + 10 * DAY).unit, "40% · PER MODEL");
+});
+
+test("a per-model resetAt earlier than the billing period end bounds the projection", () => {
+  // The model resets Oct 20 (before the Nov 1 period end): the projection must use the model's own reset.
+  assert.equal(dial(paceQuota(500, { resetAt: "2026-10-20T00:00:00Z" }), octFirst + 10 * DAY).unit, "50% · ~95% AT RESET");
+});
+
+test("models with different resetAt dates each show their own projection", () => {
+  const quota = {
+    eligibility: "unknown" as const,
+    periodStart: "2026-10-01",
+    uncappedModels: [],
+    models: [
+      { model: "early", tokensUsed: 400, cap: 1000, percentage: 40, resetAt: "2026-10-15T00:00:00Z", windowHours: null },
+      { model: "late", tokensUsed: 400, cap: 1000, percentage: 40, resetAt: "2026-11-01T00:00:00Z", windowHours: null },
+    ],
+  };
+  // early resets before its projected cap date (Oct 26): the projection is bounded by the model reset.
+  assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "early" }, octFirst + 10 * DAY).unit, "40% · ~56% AT RESET");
+  assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "late" }, octFirst + 10 * DAY).unit, "40% · CAP OCT 26");
+});
