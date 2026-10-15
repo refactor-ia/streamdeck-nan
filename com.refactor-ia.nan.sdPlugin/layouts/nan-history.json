@@ -23,7 +23,7 @@
     {
       "key": "model",
       "type": "text",
-      "rect": [8, 26, 184, 14],
+      "rect": [8, 30, 184, 12],
       "alignment": "left",
       "font": { "size": 10, "weight": 800 },
       "value": "Dashboard",
