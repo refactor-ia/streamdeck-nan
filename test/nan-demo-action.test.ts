@@ -200,3 +200,44 @@ test("toggling into history renders the 30-day chart and switching back restores
   const pace = feedbacks.at(-1) as { demo?: string; unit?: string };
   assert.equal(pace.demo, "DASHBOARD");
 });
+
+test("a failed or empty history read falls back to the pace view, with no chart shown", async () => {
+  let failing = true;
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> {
+      if (failing) throw new Error("sentinel-usage-failure");
+      return [];
+    }
+  }();
+  const layouts: string[] = [];
+  const feedbacks: unknown[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "fallback",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  feedbacks.length = 0;
+  layouts.length = 0;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(current.view, "history", "the view still toggles even when the read fails");
+  assert.equal(layouts.includes("layouts/nan-history.json"), false, "the layout never switches to history");
+  assert.equal((feedbacks.at(-1) as { demo?: string }).demo, "DASHBOARD");
+  assert.equal(feedbacks.some((payload) => JSON.stringify(payload).includes("sentinel-usage-failure")), false);
+  assert.equal(feedbacks.some((payload) => (payload as { demo?: string }).demo === "HISTORY"), false);
+
+  failing = false;
+  await tap(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(feedbacks.some((payload) => (payload as { demo?: string }).demo === "HISTORY"), false, "an empty history is not shown as a chart either");
+});
