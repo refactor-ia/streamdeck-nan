@@ -273,3 +273,26 @@ test("pressing the dial toggles the view; a long press refreshes instead", async
   await press(1_000 + 800);
   assert.equal(current.view, "pace", "a long press does not toggle");
 });
+
+test("a dial restored in the history view loads its history on appearance", async (t) => {
+  const rows = [{ date: "2026-10-14", model: "glm5.3", totalTokens: 9 }];
+  const feedbacks: unknown[] = [];
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> { return rows; }
+  }();
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3", view: "history" };
+  const dial = {
+    id: "restored",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async () => undefined,
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async () => undefined,
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal((feedbacks.at(-1) as { demo?: string }).demo, "HISTORY", "the restored dial renders the chart without needing a toggle");
+});

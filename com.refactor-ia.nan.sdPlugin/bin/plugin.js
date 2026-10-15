@@ -12492,6 +12492,8 @@ let NanDemoUsage = (() => {
             await this.activateOnAppearance(action, ev.payload.settings, async () => {
                 await this.migrateLegacySource(action, ev.payload.settings, this.lifecycleGuard(action));
             });
+            if (ev.payload.settings.view === "history")
+                void this.loadHistory(action.id, action, ev.payload.settings);
         }
         async onTouchTap(ev) {
             if (!ev.action.isDial())
@@ -12514,8 +12516,9 @@ let NanDemoUsage = (() => {
                 return;
             const startedAt = this.pressStartedAt.get(ev.action.id);
             this.pressStartedAt.delete(ev.action.id);
+            const heldMs = startedAt === undefined ? -1 : Date.now() - startedAt;
             // A long press is the explicit fresh read; a quick press toggles pace/history.
-            if (startedAt !== undefined && Date.now() - startedAt >= DIAL_LONG_PRESS_MS) {
+            if (heldMs >= DIAL_LONG_PRESS_MS) {
                 await this.refresh(ev.action);
                 return;
             }
@@ -12548,6 +12551,8 @@ let NanDemoUsage = (() => {
             if (!isCurrent())
                 return;
             await this.render(ev.action, this.dashboard.getCachedUsage(settings), settings);
+            if (settings.view === "history" && !this.historyRows.get(ev.action.id)?.length)
+                void this.loadHistory(ev.action.id, ev.action, settings);
         }
         async onDialRotate(ev) {
             if (!ev.action.isDial())
