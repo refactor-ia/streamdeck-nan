@@ -49,6 +49,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     await this.activateOnAppearance(action, ev.payload.settings, async () => {
       await this.migrateLegacySource(action, ev.payload.settings, this.lifecycleGuard(action));
     });
+    if (ev.payload.settings.view === "history") void this.loadHistory(action.id, action, ev.payload.settings);
   }
 
   override async onTouchTap(ev: TouchTapEvent<NanDemoSettings>): Promise<void> {
@@ -60,6 +61,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
 
   private pressStartedAt = new Map<string, number>();
 
+
   override async onDialDown(ev: { action: DialAction<NanDemoSettings>; payload: { settings: NanDemoSettings } }): Promise<void> {
     if (!ev.action.isDial()) return;
     this.pressStartedAt.set(ev.action.id, Date.now());
@@ -69,8 +71,9 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     if (!ev.action.isDial()) return;
     const startedAt = this.pressStartedAt.get(ev.action.id);
     this.pressStartedAt.delete(ev.action.id);
+    const heldMs = startedAt === undefined ? -1 : Date.now() - startedAt;
     // A long press is the explicit fresh read; a quick press toggles pace/history.
-    if (startedAt !== undefined && Date.now() - startedAt >= DIAL_LONG_PRESS_MS) { await this.refresh(ev.action); return; }
+    if (heldMs >= DIAL_LONG_PRESS_MS) { await this.refresh(ev.action); return; }
     await this.toggleView(ev.action, ev.payload.settings);
   }
 
@@ -91,6 +94,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     );
     if (isCurrent() && this.selectionGeneration(action.id) === selectionGeneration) {
       await this.render(action, this.dashboard.getCachedUsage(persisted), persisted);
+    } else {
     }
     if (persisted.view === "history") void this.loadHistory(action.id, action, persisted);
   }
@@ -104,6 +108,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     const settings = await this.migrateLegacySource(ev.action, ev.payload.settings, isCurrent);
     if (!isCurrent()) return;
     await this.render(ev.action, this.dashboard.getCachedUsage(settings), settings);
+    if (settings.view === "history" && !this.historyRows.get(ev.action.id)?.length) void this.loadHistory(ev.action.id, ev.action, settings);
   }
 
   override async onDialRotate(ev: DialRotateEvent<NanDemoSettings>): Promise<void> {
