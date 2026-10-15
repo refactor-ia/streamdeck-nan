@@ -10154,6 +10154,41 @@ function formatPace(pace) {
         case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
     }
 }
+/**
+ * 30-day usage history chart: 184x64 SVG with one 4px bar per day, scaled to the
+ * busiest day, grounded by a baseline. Zero days produce no bar.
+ */
+const CHART_BAR_WIDTH = 4;
+const CHART_PITCH = 6;
+const CHART_X0 = 2;
+const CHART_BASE_Y = 62;
+const CHART_MAX_HEIGHT = 60;
+const CHART_BAR_COLOR = "#7127ff";
+function renderNanUsageHistoryChart(totals) {
+    const max = Math.max(...totals.map((entry) => entry.totalTokens), 0);
+    const bars = totals
+        .map((entry, index) => {
+        if (entry.totalTokens <= 0 || max <= 0)
+            return "";
+        const height = Math.max(1, Math.round(entry.totalTokens / max * CHART_MAX_HEIGHT));
+        const x = CHART_X0 + index * CHART_PITCH;
+        return `<rect x="${x}" y="${CHART_BASE_Y - height}" width="${CHART_BAR_WIDTH}" height="${height}" fill="${CHART_BAR_COLOR}"/>`;
+    })
+        .join("");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="184" height="64" viewBox="0 0 184 64">`
+        + `<line x1="0" y1="${CHART_BASE_Y + 0.5}" x2="184" y2="${CHART_BASE_Y + 0.5}" stroke="#9a8fb8" stroke-width="1"/>`
+        + bars
+        + `</svg>`;
+}
+function renderNanUsageHistoryFeedback(totals, model) {
+    return Object.freeze({
+        title: "NaN",
+        demo: "HISTORY",
+        model: model ?? "--",
+        chart: `data:image/svg+xml;base64,${Buffer.from(renderNanUsageHistoryChart(totals), "utf8").toString("base64")}`,
+        status: "",
+    });
+}
 function dashboardStatus(state) {
     switch (state.error) {
         case "needs-key": return "ADD API KEY";
@@ -11803,6 +11838,12 @@ class NanApiUsageError extends Error {
             this.retryAfterMs = retryAfterMs;
     }
 }
+const DAILY_WINDOW_DAYS = 30;
+const DAILY_PAGE_ROWS = "200";
+const MAX_DAILY_PAGES = 50;
+const DAY_MS$1 = 24 * 60 * 60 * 1000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const utcDay$1 = (value) => value.toISOString().slice(0, 10);
 class NanApiUsageClient {
     fetcher;
     clock;
@@ -11814,9 +11855,32 @@ class NanApiUsageClient {
     }
     /** One request per call: `totals.by_model` covers the whole window and `all_time` is always present. */
     async getUsage(apiKey) {
-        const today = this.now().toISOString().slice(0, 10);
+        const today = utcDay$1(this.now());
         const query = new URLSearchParams({ start_date: `${today.slice(0, 7)}-01`, end_date: today, limit: "1" });
-        const value = await getNanJson({
+        const value = await this.fetchPage(apiKey, query);
+        return parseNanApiUsage(value);
+    }
+    /** Per-day per-model rows for the last `days` UTC days (default 30), following cursor pagination. */
+    async getDailyUsage(apiKey, days = DAILY_WINDOW_DAYS) {
+        const today = utcDay$1(this.now());
+        const start = utcDay$1(new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * DAY_MS$1));
+        const rows = [];
+        let cursor;
+        for (let page = 0; page < MAX_DAILY_PAGES; page += 1) {
+            const query = new URLSearchParams({ start_date: start, end_date: today, limit: DAILY_PAGE_ROWS });
+            if (cursor !== undefined)
+                query.set("cursor", cursor);
+            const parsed = parseNanApiDailyPage(await this.fetchPage(apiKey, query));
+            rows.push(...parsed.rows);
+            if (!parsed.hasMore)
+                return Object.freeze(rows);
+            cursor = parsed.nextCursor;
+        }
+        // A server that never stops reporting more pages is misbehaving; refuse rather than loop.
+        throw new NanApiUsageError("transport");
+    }
+    fetchPage(apiKey, query) {
+        return getNanJson({
             url: `${NAN_API_USAGE_URL}?${query}`,
             apiKey,
             fetcher: this.fetcher,
@@ -11825,8 +11889,30 @@ class NanApiUsageClient {
             createError: (kind, retryAfterMs) => new NanApiUsageError(kind, retryAfterMs),
             isExpectedError: (error) => error instanceof NanApiUsageError,
         });
-        return parseNanApiUsage(value);
     }
+}
+function parseNanApiDailyPage(value) {
+    if (!isRecord$1(value) || value.object !== "usage.report" || !Array.isArray(value.data)
+        || typeof value.has_more !== "boolean") {
+        throw new NanApiUsageError("schema");
+    }
+    if (value.has_more && (typeof value.next_cursor !== "string" || value.next_cursor === "")) {
+        throw new NanApiUsageError("schema");
+    }
+    const rows = [];
+    for (const entry of value.data) {
+        if (!isRecord$1(entry) || typeof entry.date !== "string" || !DATE_RE.test(entry.date)
+            || !isModelName$2(entry.model) || !isCounter$1(entry.prompt_tokens)
+            || !isCounter$1(entry.completion_tokens) || !isCounter$1(entry.total_tokens)) {
+            throw new NanApiUsageError("schema");
+        }
+        rows.push(Object.freeze({ date: entry.date, model: entry.model, totalTokens: entry.total_tokens }));
+    }
+    return Object.freeze({
+        rows: Object.freeze(rows),
+        hasMore: value.has_more,
+        ...(value.has_more ? { nextCursor: value.next_cursor } : {}),
+    });
 }
 function parseNanApiUsage(value) {
     if (!isRecord$1(value) || value.object !== "usage.report" || !isRecord$1(value.totals) || !isRecord$1(value.all_time)) {
@@ -12097,6 +12183,17 @@ class NanDashboardController {
         this.now = options.now ?? Date.now;
     }
     isDashboardWatched() { return this.watchers.size > 0; }
+    /**
+     * On-demand 30-day per-model usage rows for the dial history view. Unlike the shared
+     * snapshot this is a direct read: it never feeds the dashboard cache or its backoff.
+     * Throws a generic error when the Keychain is unavailable; undefined means no usable key.
+     */
+    async fetchDailyUsage(days = 30) {
+        const apiKey = await this.keys.read();
+        if (!apiKey || !this.usage.getDailyUsage)
+            return undefined;
+        return this.usage.getDailyUsage(apiKey, days);
+    }
     /** Leases the one shared poll for visible aggregate keypad actions. */
     watchDashboard() {
         const watcher = Symbol("dashboard-watcher");
@@ -12289,6 +12386,31 @@ const defaultWatchScheduler = {
     clearInterval: (timer) => clearInterval(timer),
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const utcDay = (value) => value.toISOString().slice(0, 10);
+/**
+ * Per-day total tokens for one model over the last `days` UTC days ending today,
+ * oldest first. Days without rows are zero-filled; rows for other models or
+ * outside the window are ignored. Same-day rows are summed.
+ */
+function dailyTotalsForModel(rows, model, days, now = () => new Date()) {
+    const today = utcDay(now());
+    const startIndex = Date.parse(`${today}T00:00:00Z`) - (days - 1) * DAY_MS;
+    const totals = new Map();
+    for (const row of rows) {
+        if (row.model !== model)
+            continue;
+        const day = Date.parse(`${row.date}T00:00:00Z`);
+        if (!Number.isFinite(day) || day < startIndex || day > Date.parse(`${today}T00:00:00Z`))
+            continue;
+        totals.set(row.date, (totals.get(row.date) ?? 0) + row.totalTokens);
+    }
+    return Array.from({ length: days }, (_, index) => {
+        const date = utcDay(new Date(startIndex + index * DAY_MS));
+        return Object.freeze({ date, totalTokens: totals.get(date) ?? 0 });
+    });
+}
+
 const SAVE_API_KEY_KIND = "nan.saveApiKey.v1";
 const CLEAR_API_KEY_KIND = "nan.clearApiKey.v1";
 const API_KEY_RESULT_KIND = "nan.apiKey.result.v1";
@@ -12333,6 +12455,7 @@ async function handleNanApiKeyMessage(payload, controller) {
     }
 }
 
+const LAYOUT_PATHS = { pace: "layouts/nan.json", history: "layouts/nan-history.json" };
 let NanDemoUsage = (() => {
     let _classDecorators = [action({ UUID: "com.refactor-ia.nan.nan-demo" })];
     let _classDescriptor;
@@ -12352,6 +12475,9 @@ let NanDemoUsage = (() => {
         desiredSettings = new Map();
         settingsWrites = new NanSettingsWriteQueue();
         legacySourceMigrated = new Set();
+        layouts = new Map();
+        historyRows = new Map();
+        historyLoading = new Set();
         dashboard;
         constructor(dashboard = new NanDashboardController()) {
             super();
@@ -12369,7 +12495,24 @@ let NanDemoUsage = (() => {
         async onTouchTap(ev) {
             if (!ev.action.isDial())
                 return;
-            await this.refresh(ev.action);
+            // A hold stays an explicit fresh read; a short tap toggles pace/history using the cached snapshot.
+            if (ev.payload.hold) {
+                await this.refresh(ev.action);
+                return;
+            }
+            const isCurrent = this.lifecycleGuard(ev.action);
+            const isSameAppearance = this.appearanceGuard(ev.action);
+            if (!isCurrent())
+                return;
+            const currentSettings = this.desiredSettings.get(ev.action.id) ?? ev.payload.settings;
+            const settings = { ...currentSettings, view: currentSettings.view === "history" ? "pace" : "history" };
+            const selectionGeneration = this.recordSelection(ev.action.id, settings);
+            const persisted = await persistLatestNanSettings(selectionGeneration, settings, () => this.latestSelection(ev.action.id, settings), (latest) => this.writeSettings(ev.action, latest), isCurrent, isSameAppearance);
+            if (isCurrent() && this.selectionGeneration(ev.action.id) === selectionGeneration) {
+                await this.render(ev.action, this.dashboard.getCachedUsage(persisted), persisted);
+            }
+            if (persisted.view === "history")
+                void this.loadHistory(ev.action.id, ev.action, persisted);
         }
         async onDidReceiveSettings(ev) {
             if (!ev.action.isDial())
@@ -12423,6 +12566,9 @@ let NanDemoUsage = (() => {
             this.selectionGenerations.delete(ev.action.id);
             this.desiredSettings.delete(ev.action.id);
             this.legacySourceMigrated.delete(ev.action.id);
+            this.layouts.delete(ev.action.id);
+            this.historyRows.delete(ev.action.id);
+            this.historyLoading.delete(ev.action.id);
         }
         async updateDisplay(action, isCurrent, force) {
             // Aggregate keypad keys own the shared poll. A dial timer redraws its cached snapshot
@@ -12467,7 +12613,53 @@ let NanDemoUsage = (() => {
             return { generation: latest.generation, settings: migrated };
         }
         async render(action, state, settings) {
+            const rows = settings.view === "history" ? this.historyRows.get(action.id) : undefined;
+            if (rows && rows.length > 0) {
+                const models = listNanModels(state);
+                // When the quota catalog is momentarily unavailable, a persisted selection that the
+                // history itself observes is still a valid "selected model".
+                const selected = state.error ? undefined
+                    : resolveNanLiveModel(models, models, settings.model)
+                        ?? (settings.model && rows.some((row) => row.model === settings.model) ? settings.model : undefined);
+                const totals = dailyTotalsForModel(rows, selected ?? "", 30);
+                await this.useLayout(action, "history");
+                await action.setFeedback(renderNanUsageHistoryFeedback(totals, selected));
+                return;
+            }
+            // No usable history (not loaded yet, empty, or failed read) keeps the existing pace view.
+            await this.useLayout(action, "pace");
             await action.setFeedback(renderNanDashboardFeedback(state, settings));
+        }
+        async useLayout(action, layout) {
+            if (this.layouts.get(action.id) === layout)
+                return;
+            this.layouts.set(action.id, layout);
+            try {
+                await action.setFeedbackLayout(LAYOUT_PATHS[layout]);
+            }
+            catch {
+                this.layouts.delete(action.id);
+            }
+        }
+        /**
+         * Direct on-demand read for the history view; a failure or missing key records an
+         * empty series so the dial falls back to the pace view instead of showing a stale chart.
+         */
+        async loadHistory(contextId, action, settings) {
+            if (this.historyLoading.has(contextId))
+                return;
+            this.historyLoading.add(contextId);
+            try {
+                this.historyRows.set(contextId, await this.dashboard.fetchDailyUsage(30));
+            }
+            catch {
+                this.historyRows.set(contextId, []);
+            }
+            finally {
+                this.historyLoading.delete(contextId);
+            }
+            if (this.hasActiveLifecycle(action))
+                await this.render(action, this.dashboard.getCachedUsage(settings), settings);
         }
         selectionGeneration(contextId) { return this.selectionGenerations.get(contextId) ?? 0; }
         recordSelection(contextId, settings) {
