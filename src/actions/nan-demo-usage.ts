@@ -9,7 +9,7 @@ import {
   type WillDisappearEvent,
   streamDeck,
 } from "@elgato/streamdeck";
-import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js";
+import { RefreshingAction, type RefreshScheduler, type RefreshSettings } from "../refreshing-action.js";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { cycleNanLiveModel, listNanModels, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
 import { renderNanDashboardFeedback, renderNanUsageHistoryFeedback } from "./usage-feedback.js";
@@ -37,8 +37,8 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   private readonly historyLoading = new Set<string>();
   private readonly dashboard: NanDashboardController;
 
-  constructor(dashboard = new NanDashboardController()) {
-    super();
+  constructor(dashboard = new NanDashboardController(), scheduler?: RefreshScheduler) {
+    super(scheduler);
     this.dashboard = dashboard;
   }
 
