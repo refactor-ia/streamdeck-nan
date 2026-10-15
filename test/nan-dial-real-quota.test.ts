@@ -83,3 +83,7 @@ test("dial keeps the rolling window text for models with rolling usage", () => {
   const rolling = { tokensUsed: 30, budget: 100, percentage: 30, resetAt: null, windowHours: 4 };
   assert.equal(dial(paceQuota(400, { rolling }), octFirst + 10 * DAY).unit, "30% · ROLLING 4H");
 });
+
+test("dial shows <1% AT RESET when the projection rounds to zero", () => {
+  assert.equal(dial(paceQuota(1), octFirst + 10 * DAY).unit, "0.1% · <1% AT RESET");
+});
