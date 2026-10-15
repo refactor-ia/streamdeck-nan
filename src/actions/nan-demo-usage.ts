@@ -12,7 +12,8 @@ import {
 import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js";
 import { NanDashboardController, type NanDashboardUsage } from "./nan-dashboard-controller.js";
 import { cycleNanLiveModel, listNanModels, NanSettingsWriteQueue, persistLatestNanSettings, resolveNanLiveModel } from "./nan-live-model.js";
-import { renderNanDashboardFeedback } from "./usage-feedback.js";
+import { renderNanDashboardFeedback, renderNanUsageHistoryFeedback } from "./usage-feedback.js";
+import { dailyTotalsForModel } from "./nan-usage-history.js";
 import { handleNanApiKeyMessage } from "./nan-api-key-message.js";
 
 export type NanDemoSettings = RefreshSettings & Partial<{
@@ -21,12 +22,18 @@ export type NanDemoSettings = RefreshSettings & Partial<{
   view: "pace" | "history";
 }>;;
 
+type NanDialLayout = "pace" | "history";
+const LAYOUT_PATHS: Record<NanDialLayout, string> = { pace: "layouts/nan.json", history: "layouts/nan-history.json" };
+
 @action({ UUID: "com.refactor-ia.nan.nan-demo" })
 export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   private readonly selectionGenerations = new Map<string, number>();
   private readonly desiredSettings = new Map<string, NanDemoSettings>();
   private readonly settingsWrites = new NanSettingsWriteQueue();
   private readonly legacySourceMigrated = new Set<string>();
+  private readonly layouts = new Map<string, NanDialLayout>();
+  private readonly historyRows = new Map<string, readonly { date: string; model: string; totalTokens: number }[] | undefined>();
+  private readonly historyLoading = new Set<string>();
   private readonly dashboard: NanDashboardController;
 
   constructor(dashboard = new NanDashboardController()) {
@@ -64,6 +71,7 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     if (isCurrent() && this.selectionGeneration(ev.action.id) === selectionGeneration) {
       await this.render(ev.action, this.dashboard.getCachedUsage(persisted), persisted);
     }
+    if (persisted.view === "history") void this.loadHistory(ev.action.id, ev.action, persisted);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<NanDemoSettings>): Promise<void> {
@@ -117,6 +125,9 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     this.selectionGenerations.delete(ev.action.id);
     this.desiredSettings.delete(ev.action.id);
     this.legacySourceMigrated.delete(ev.action.id);
+    this.layouts.delete(ev.action.id);
+    this.historyRows.delete(ev.action.id);
+    this.historyLoading.delete(ev.action.id);
   }
 
   protected override async updateDisplay(action: DialAction<NanDemoSettings>, isCurrent: () => boolean, force: boolean): Promise<void> {
@@ -171,7 +182,45 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   }
 
   private async render(action: DialAction<NanDemoSettings>, state: NanDashboardUsage, settings: NanDemoSettings): Promise<void> {
+    const rows = settings.view === "history" ? this.historyRows.get(action.id) : undefined;
+    if (rows && rows.length > 0) {
+      const models = listNanModels(state);
+      // When the quota catalog is momentarily unavailable, a persisted selection that the
+      // history itself observes is still a valid "selected model".
+      const selected = state.error ? undefined
+        : resolveNanLiveModel(models, models, settings.model)
+          ?? (settings.model && rows.some((row) => row.model === settings.model) ? settings.model : undefined);
+      const totals = dailyTotalsForModel(rows, selected ?? "", 30);
+      await this.useLayout(action, "history");
+      await action.setFeedback(renderNanUsageHistoryFeedback(totals, selected));
+      return;
+    }
+    // No usable history (not loaded yet, empty, or failed read) keeps the existing pace view.
+    await this.useLayout(action, "pace");
     await action.setFeedback(renderNanDashboardFeedback(state, settings));
+  }
+
+  private async useLayout(action: DialAction<NanDemoSettings>, layout: NanDialLayout): Promise<void> {
+    if (this.layouts.get(action.id) === layout) return;
+    this.layouts.set(action.id, layout);
+    try { await action.setFeedbackLayout(LAYOUT_PATHS[layout]); } catch { this.layouts.delete(action.id); }
+  }
+
+  /**
+   * Direct on-demand read for the history view; a failure or missing key records an
+   * empty series so the dial falls back to the pace view instead of showing a stale chart.
+   */
+  private async loadHistory(contextId: string, action: DialAction<NanDemoSettings>, settings: NanDemoSettings): Promise<void> {
+    if (this.historyLoading.has(contextId)) return;
+    this.historyLoading.add(contextId);
+    try {
+      this.historyRows.set(contextId, await this.dashboard.fetchDailyUsage(30));
+    } catch {
+      this.historyRows.set(contextId, []);
+    } finally {
+      this.historyLoading.delete(contextId);
+    }
+    if (this.hasActiveLifecycle(action)) await this.render(action, this.dashboard.getCachedUsage(settings), settings);
   }
 
   private selectionGeneration(contextId: string): number { return this.selectionGenerations.get(contextId) ?? 0; }

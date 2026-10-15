@@ -159,3 +159,44 @@ test("a short tap toggles the dial view and persists it; a hold keeps the fresh 
   assert.deepEqual(views, ["pace"], "a hold does not change the view");
   assert.equal(usageReads, baselineReads + 1, "a hold keeps the explicit fresh read");
 });
+
+test("toggling into history renders the 30-day chart and switching back restores the pace layout", async (t) => {
+  const rows = [
+    { date: "2026-10-13", model: "glm5.3", totalTokens: 90751189 },
+    { date: "2026-10-14", model: "glm5.3", totalTokens: 9 },
+  ];
+  const layouts: string[] = [];
+  const feedbacks: unknown[] = [];
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> { return rows; }
+  }();
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "history",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  feedbacks.length = 0;
+  layouts.length = 0;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(layouts, ["layouts/nan-history.json"]);
+  const history = feedbacks.at(-1) as { demo?: string; chart?: string; model?: string };
+  assert.equal(history.demo, "HISTORY");
+  assert.equal(history.model, "glm5.3");
+  assert.match(history.chart!, /^data:image\/svg\+xml;base64,/);
+
+  await tap(false);
+  assert.equal(layouts.at(-1), "layouts/nan.json", "returning to pace restores the original layout");
+  const pace = feedbacks.at(-1) as { demo?: string; unit?: string };
+  assert.equal(pace.demo, "DASHBOARD");
+});
