@@ -12456,6 +12456,7 @@ async function handleNanApiKeyMessage(payload, controller) {
 }
 
 const LAYOUT_PATHS = { pace: "layouts/nan.json", history: "layouts/nan-history.json" };
+const DIAL_LONG_PRESS_MS = 700;
 let NanDemoUsage = (() => {
     let _classDecorators = [action({ UUID: "com.refactor-ia.nan.nan-demo" })];
     let _classDescriptor;
@@ -12500,19 +12501,40 @@ let NanDemoUsage = (() => {
                 await this.refresh(ev.action);
                 return;
             }
-            const isCurrent = this.lifecycleGuard(ev.action);
-            const isSameAppearance = this.appearanceGuard(ev.action);
+            await this.toggleView(ev.action, ev.payload.settings);
+        }
+        pressStartedAt = new Map();
+        async onDialDown(ev) {
+            if (!ev.action.isDial())
+                return;
+            this.pressStartedAt.set(ev.action.id, Date.now());
+        }
+        async onDialUp(ev) {
+            if (!ev.action.isDial())
+                return;
+            const startedAt = this.pressStartedAt.get(ev.action.id);
+            this.pressStartedAt.delete(ev.action.id);
+            // A long press is the explicit fresh read; a quick press toggles pace/history.
+            if (startedAt !== undefined && Date.now() - startedAt >= DIAL_LONG_PRESS_MS) {
+                await this.refresh(ev.action);
+                return;
+            }
+            await this.toggleView(ev.action, ev.payload.settings);
+        }
+        async toggleView(action, eventSettings) {
+            const isCurrent = this.lifecycleGuard(action);
+            const isSameAppearance = this.appearanceGuard(action);
             if (!isCurrent())
                 return;
-            const currentSettings = this.desiredSettings.get(ev.action.id) ?? ev.payload.settings;
+            const currentSettings = this.desiredSettings.get(action.id) ?? eventSettings;
             const settings = { ...currentSettings, view: currentSettings.view === "history" ? "pace" : "history" };
-            const selectionGeneration = this.recordSelection(ev.action.id, settings);
-            const persisted = await persistLatestNanSettings(selectionGeneration, settings, () => this.latestSelection(ev.action.id, settings), (latest) => this.writeSettings(ev.action, latest), isCurrent, isSameAppearance);
-            if (isCurrent() && this.selectionGeneration(ev.action.id) === selectionGeneration) {
-                await this.render(ev.action, this.dashboard.getCachedUsage(persisted), persisted);
+            const selectionGeneration = this.recordSelection(action.id, settings);
+            const persisted = await persistLatestNanSettings(selectionGeneration, settings, () => this.latestSelection(action.id, settings), (latest) => this.writeSettings(action, latest), isCurrent, isSameAppearance);
+            if (isCurrent() && this.selectionGeneration(action.id) === selectionGeneration) {
+                await this.render(action, this.dashboard.getCachedUsage(persisted), persisted);
             }
             if (persisted.view === "history")
-                void this.loadHistory(ev.action.id, ev.action, persisted);
+                void this.loadHistory(action.id, action, persisted);
         }
         async onDidReceiveSettings(ev) {
             if (!ev.action.isDial())
@@ -12637,7 +12659,7 @@ let NanDemoUsage = (() => {
             try {
                 await action.setFeedbackLayout(LAYOUT_PATHS[layout]);
             }
-            catch {
+            catch (error) {
                 this.layouts.delete(action.id);
             }
         }
@@ -12650,9 +12672,10 @@ let NanDemoUsage = (() => {
                 return;
             this.historyLoading.add(contextId);
             try {
-                this.historyRows.set(contextId, await this.dashboard.fetchDailyUsage(30));
+                const rows = await this.dashboard.fetchDailyUsage(30);
+                this.historyRows.set(contextId, rows);
             }
-            catch {
+            catch (error) {
                 this.historyRows.set(contextId, []);
             }
             finally {

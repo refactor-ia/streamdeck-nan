@@ -89,7 +89,7 @@
       "Encoder": {
         "layout": "layouts/nan.json",
         "TriggerDescription": {
-          "Touch": "Tap: toggle history · Hold: refresh"
+          "Touch": "Press: toggle history · Hold: refresh"
         }
       },
       "States": [

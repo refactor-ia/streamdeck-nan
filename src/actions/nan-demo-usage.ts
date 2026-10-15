@@ -24,6 +24,7 @@ export type NanDemoSettings = RefreshSettings & Partial<{
 
 type NanDialLayout = "pace" | "history";
 const LAYOUT_PATHS: Record<NanDialLayout, string> = { pace: "layouts/nan.json", history: "layouts/nan-history.json" };
+const DIAL_LONG_PRESS_MS = 700;
 
 @action({ UUID: "com.refactor-ia.nan.nan-demo" })
 export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
@@ -54,24 +55,44 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     if (!ev.action.isDial()) return;
     // A hold stays an explicit fresh read; a short tap toggles pace/history using the cached snapshot.
     if (ev.payload.hold) { await this.refresh(ev.action); return; }
-    const isCurrent = this.lifecycleGuard(ev.action);
-    const isSameAppearance = this.appearanceGuard(ev.action);
+    await this.toggleView(ev.action, ev.payload.settings);
+  }
+
+  private pressStartedAt = new Map<string, number>();
+
+  override async onDialDown(ev: { action: DialAction<NanDemoSettings>; payload: { settings: NanDemoSettings } }): Promise<void> {
+    if (!ev.action.isDial()) return;
+    this.pressStartedAt.set(ev.action.id, Date.now());
+  }
+
+  override async onDialUp(ev: { action: DialAction<NanDemoSettings>; payload: { settings: NanDemoSettings } }): Promise<void> {
+    if (!ev.action.isDial()) return;
+    const startedAt = this.pressStartedAt.get(ev.action.id);
+    this.pressStartedAt.delete(ev.action.id);
+    // A long press is the explicit fresh read; a quick press toggles pace/history.
+    if (startedAt !== undefined && Date.now() - startedAt >= DIAL_LONG_PRESS_MS) { await this.refresh(ev.action); return; }
+    await this.toggleView(ev.action, ev.payload.settings);
+  }
+
+  private async toggleView(action: DialAction<NanDemoSettings>, eventSettings: NanDemoSettings): Promise<void> {
+    const isCurrent = this.lifecycleGuard(action);
+    const isSameAppearance = this.appearanceGuard(action);
     if (!isCurrent()) return;
-    const currentSettings = this.desiredSettings.get(ev.action.id) ?? ev.payload.settings;
+    const currentSettings = this.desiredSettings.get(action.id) ?? eventSettings;
     const settings: NanDemoSettings = { ...currentSettings, view: currentSettings.view === "history" ? "pace" : "history" };
-    const selectionGeneration = this.recordSelection(ev.action.id, settings);
+    const selectionGeneration = this.recordSelection(action.id, settings);
     const persisted = await persistLatestNanSettings(
       selectionGeneration,
       settings,
-      () => this.latestSelection(ev.action.id, settings),
-      (latest) => this.writeSettings(ev.action, latest),
+      () => this.latestSelection(action.id, settings),
+      (latest) => this.writeSettings(action, latest),
       isCurrent,
       isSameAppearance,
     );
-    if (isCurrent() && this.selectionGeneration(ev.action.id) === selectionGeneration) {
-      await this.render(ev.action, this.dashboard.getCachedUsage(persisted), persisted);
+    if (isCurrent() && this.selectionGeneration(action.id) === selectionGeneration) {
+      await this.render(action, this.dashboard.getCachedUsage(persisted), persisted);
     }
-    if (persisted.view === "history") void this.loadHistory(ev.action.id, ev.action, persisted);
+    if (persisted.view === "history") void this.loadHistory(action.id, action, persisted);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<NanDemoSettings>): Promise<void> {
@@ -203,7 +224,11 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
   private async useLayout(action: DialAction<NanDemoSettings>, layout: NanDialLayout): Promise<void> {
     if (this.layouts.get(action.id) === layout) return;
     this.layouts.set(action.id, layout);
-    try { await action.setFeedbackLayout(LAYOUT_PATHS[layout]); } catch { this.layouts.delete(action.id); }
+    try {
+      await action.setFeedbackLayout(LAYOUT_PATHS[layout]);
+    } catch (error) {
+      this.layouts.delete(action.id);
+    }
   }
 
   /**
@@ -214,8 +239,9 @@ export class NanDemoUsage extends RefreshingAction<NanDemoSettings> {
     if (this.historyLoading.has(contextId)) return;
     this.historyLoading.add(contextId);
     try {
-      this.historyRows.set(contextId, await this.dashboard.fetchDailyUsage(30));
-    } catch {
+      const rows = await this.dashboard.fetchDailyUsage(30);
+      this.historyRows.set(contextId, rows);
+    } catch (error) {
       this.historyRows.set(contextId, []);
     } finally {
       this.historyLoading.delete(contextId);

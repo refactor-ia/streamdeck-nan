@@ -138,7 +138,7 @@ test("NaN Dashboard branding and launcher use migrated identities and external d
   const nanDial = manifest.Actions.find(({ UUID }: { UUID: string }) => UUID === "com.refactor-ia.nan.nan-demo");
   assert.equal(nanDial.Name, "NaN Usage");
   assert.equal(nanDial.Tooltip, "Shows NaN Dashboard quota");
-  assert.equal(nanDial.Encoder.TriggerDescription.Touch, "Tap: toggle history · Hold: refresh");
+  assert.equal(nanDial.Encoder.TriggerDescription.Touch, "Press: toggle history · Hold: refresh");
   assert.equal(manifest.Actions.find(({ UUID }: { UUID: string }) => UUID === "com.refactor-ia.nan.claude").Name, "External · Claude Usage");
   assert.equal(manifest.Actions.find(({ UUID }: { UUID: string }) => UUID === "com.refactor-ia.nan.codex").Name, "External · GPT / OpenAI Usage");
   assert.equal(manifest.Actions.find(({ UUID }: { UUID: string }) => UUID === "com.refactor-ia.nan.grok").Name, "External · Grok Usage (Experimental)");
