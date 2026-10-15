@@ -9268,7 +9268,9 @@ function isRecord$7(value) {
 const CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
 const KEYCHAIN_TIMEOUT_MS = 5_000;
-const KEYCHAIN_MAX_STDOUT_BYTES = 16 * 1024;
+// The keychain blob also carries every MCP plugin credential Claude Code stores,
+// so it can grow to tens of KB; the bound is only anti-hang.
+const KEYCHAIN_MAX_STDOUT_BYTES = 256 * 1024;
 const HTTP_TIMEOUT_MS = 10_000;
 class ClaudeOauthUsageProvider {
     id = "claude-oauth";
