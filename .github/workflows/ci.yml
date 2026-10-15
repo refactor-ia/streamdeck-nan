@@ -39,6 +39,10 @@ jobs:
       - name: Verify plugin bundle is tracked
         run: git ls-files --error-unmatch -- com.refactor-ia.nan.sdPlugin/bin/plugin.js
 
+      - name: Print Node version
+
+        run: node --version
+
       - name: Build plugin bundle
         run: pnpm build
 
