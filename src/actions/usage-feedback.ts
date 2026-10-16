@@ -219,15 +219,6 @@ export function renderClaudeFeedback(result: CoordinatedUsageResult, _showCountd
   };
 }
 
-export interface CodexFeedback {
-  readonly [key: string]: FeedbackValue;
-  readonly title: "GPT / OPENAI";
-  readonly status: "" | "NO DATA" | "STALE";
-  readonly sessionValue: string;
-  readonly sessionBar: BarFeedback;
-  readonly weekValue: string;
-  readonly weekBar: BarFeedback;
-}
 
 export function renderCodexFeedback(result: CoordinatedUsageResult, showCountdown = false): CodexFeedback {
   const session = result.ok ? result.usage.windows.session : undefined;

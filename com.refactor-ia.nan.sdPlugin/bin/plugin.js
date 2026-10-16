@@ -9282,6 +9282,12 @@ class ClaudeOauthUsageProvider {
         this.readCredentials = options.readCredentials ?? readStoredClaudeCredentials;
         this.fetcher = options.fetcher ?? fetch;
     }
+    recoverAfterWake() {
+        // No cached transport state; the next read re-reads credentials and re-queries.
+    }
+    /** No background transport to stop: every read is self-contained. */
+    async stop() { }
+    stopImmediately() { }
     async getUsage() {
         const credential = await this.safeReadCredentials();
         if (!credential.ok)

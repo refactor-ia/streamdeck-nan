@@ -55,6 +55,15 @@ export class ClaudeOauthUsageProvider implements UsageProvider {
     this.fetcher = options.fetcher ?? fetch;
   }
 
+  recoverAfterWake(): void {
+    // No cached transport state; the next read re-reads credentials and re-queries.
+  }
+
+  /** No background transport to stop: every read is self-contained. */
+  async stop(): Promise<void> {}
+
+  stopImmediately(): void {}
+
   async getUsage(): Promise<UsageProviderResult> {
     const credential = await this.safeReadCredentials();
     if (!credential.ok) return failure("authentication");
