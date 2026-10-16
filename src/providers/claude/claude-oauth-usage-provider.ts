@@ -166,6 +166,7 @@ export async function readStoredClaudeCredentials(): Promise<ClaudeCredentialRea
   return parsed;
 }
 
+
 function readKeychainSecret(): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile(
