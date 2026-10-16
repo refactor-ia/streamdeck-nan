@@ -14,8 +14,8 @@ import path, { join, isAbsolute, dirname, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { realpath, stat, access } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
@@ -9194,66 +9194,6 @@ typeof SuppressedError === "function" ? SuppressedError : function (error, suppr
     return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
 };
 
-function cancellableCommand(execution) {
-    return "result" in execution
-        ? execution
-        : { result: execution, cancel: () => undefined };
-}
-function hardDeadlineCommand(timeoutMs, start) {
-    let child;
-    let deadline;
-    let settled = false;
-    let resolveResult;
-    let rejectResult;
-    const result = new Promise((resolve, reject) => {
-        resolveResult = resolve;
-        rejectResult = reject;
-    });
-    const resolve = (value) => {
-        if (settled)
-            return;
-        settled = true;
-        if (deadline)
-            clearTimeout(deadline);
-        resolveResult(value);
-    };
-    const reject = (error) => {
-        if (settled)
-            return;
-        settled = true;
-        if (deadline)
-            clearTimeout(deadline);
-        rejectResult(error);
-    };
-    try {
-        child = start({ resolve, reject });
-    }
-    catch (error) {
-        reject(error);
-    }
-    if (!settled) {
-        deadline = setTimeout(() => {
-            try {
-                child?.kill("SIGKILL");
-            }
-            catch { /* El deadline sigue siendo terminal. */ }
-            reject(Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" }));
-        }, Math.max(1, timeoutMs));
-    }
-    return {
-        result,
-        cancel: () => {
-            if (settled)
-                return;
-            try {
-                child?.kill("SIGKILL");
-            }
-            catch { /* La cancelacion igualmente liquida la promesa. */ }
-            reject(new Error("Command cancelled"));
-        },
-    };
-}
-
 const usageWindowNames = ["session", "week"];
 const MAX_PROVIDER_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 const safeErrorMessages = {
@@ -9282,7 +9222,7 @@ function sanitizeUsageError(error, fallback = "unavailable") {
         : new UsageProviderError(fallback);
 }
 function normalizeUsageSnapshot(value) {
-    if (!isRecord$8(value) || !Number.isFinite(value.observedAt) || !isRecord$8(value.windows)) {
+    if (!isRecord$7(value) || !Number.isFinite(value.observedAt) || !isRecord$7(value.windows)) {
         return undefined;
     }
     const windows = {};
@@ -9305,336 +9245,193 @@ function normalizeUsageSnapshot(value) {
     return { windows, observedAt: value.observedAt };
 }
 function isUsageWindow(value) {
-    return (isRecord$8(value) &&
+    return (isRecord$7(value) &&
         Number.isFinite(value.usedPercent) &&
         (value.windowMinutes === undefined || Number.isFinite(value.windowMinutes)) &&
         (value.resetsAt === undefined || typeof value.resetsAt === "string"));
 }
-function isRecord$8(value) {
+function isRecord$7(value) {
     return typeof value === "object" && value !== null;
 }
 
-const CLAUDE_USAGE_ARGS = [
-    "-p",
-    "/usage",
-    "--tools",
-    "",
-    "--output-format",
-    "json",
-];
-const DEFAULT_MAX_STDOUT_BYTES = 64 * 1024;
-const FIXED_PATH$2 = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
-class ClaudeUsageProvider {
-    id = "claude";
-    runCommand;
-    resolveExecutable;
-    validateExecutable;
-    executableCandidates;
-    environment;
+/**
+ * Claude Pro/Max usage via the same OAuth endpoint Claude Code's `/usage` uses.
+ * The CLI's `-p /usage` output no longer carries limit percentages, so we read
+ * the session Claude Code already stores (macOS Keychain "Claude Code-credentials",
+ * fallback `~/.claude/.credentials.json`) and query
+ * `https://api.anthropic.com/api/oauth/usage` directly. Unofficial: may change.
+ *
+ * The stored token is never refreshed here — refreshing would rotate Claude Code's
+ * refresh token and could log the CLI out. An expired session fails as `authentication`
+ * and the user renews by opening Claude Code.
+ */
+const CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_TIMEOUT_MS = 5_000;
+// The keychain blob also carries every MCP plugin credential Claude Code stores,
+// so it can grow to tens of KB; the bound is only anti-hang.
+const KEYCHAIN_MAX_STDOUT_BYTES = 256 * 1024;
+const HTTP_TIMEOUT_MS = 10_000;
+class ClaudeOauthUsageProvider {
+    id = "claude-oauth";
     now;
-    timeoutMs;
-    maxStdoutBytes;
-    activeCommands = new Set();
-    generation = 0;
-    stopped = false;
-    stopping;
+    readCredentials;
+    fetcher;
     constructor(options = {}) {
-        this.runCommand = options.runCommand ?? runCommand;
-        this.resolveExecutable = options.resolveExecutable ?? resolveTrustedClaudeExecutable;
-        this.validateExecutable = options.validateExecutable ?? validateTrustedClaudeExecutable;
-        this.executableCandidates = options.executableCandidates ?? [
-            join(homedir(), ".local", "bin", "claude"),
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            "/usr/bin/claude",
-        ];
-        this.environment = options.environment ?? claudeEnvironment();
         this.now = options.now ?? Date.now;
-        this.timeoutMs = Math.max(1, options.timeoutMs ?? 10_000);
-        this.maxStdoutBytes = Math.max(1, options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES);
-    }
-    async getUsage() {
-        if (this.stopped)
-            return failure("stopped");
-        const generation = this.generation;
-        try {
-            for (const candidate of this.executableCandidates) {
-                const identity = await this.resolveExecutable(candidate);
-                if (!this.isCurrent(generation))
-                    return failure(this.stopped ? "stopped" : "unavailable");
-                if (!identity || !await this.validateExecutable(identity))
-                    continue;
-                if (!this.isCurrent(generation))
-                    return failure(this.stopped ? "stopped" : "unavailable");
-                try {
-                    const command = cancellableCommand(this.runCommand(identity.executable, CLAUDE_USAGE_ARGS, {
-                        timeoutMs: this.timeoutMs,
-                        maxStdoutBytes: this.maxStdoutBytes,
-                        env: this.environment,
-                    }));
-                    this.activeCommands.add(command);
-                    let response;
-                    try {
-                        response = await command.result;
-                    }
-                    finally {
-                        this.activeCommands.delete(command);
-                    }
-                    if (!this.isCurrent(generation))
-                        return failure(this.stopped ? "stopped" : "unavailable");
-                    if (response.exitCode !== 0)
-                        return failure("unavailable");
-                    if (Buffer.byteLength(response.stdout, "utf8") > this.maxStdoutBytes) {
-                        return failure("invalid-response");
-                    }
-                    const windows = parseClaudeUsage(response.stdout);
-                    if (!windows)
-                        return failure("invalid-response");
-                    return { ok: true, usage: { windows, observedAt: this.now() } };
-                }
-                catch (error) {
-                    if (!this.isCurrent(generation))
-                        return failure(this.stopped ? "stopped" : "unavailable");
-                    if (isTimeout(error))
-                        return failure("timeout");
-                    if (isMaxBufferError(error))
-                        return failure("invalid-response");
-                    return failure("unavailable");
-                }
-            }
-            return failure("executable-not-found");
-        }
-        catch (error) {
-            return { ok: false, error: sanitizeUsageError(error) };
-        }
+        this.readCredentials = options.readCredentials ?? readStoredClaudeCredentials;
+        this.fetcher = options.fetcher ?? fetch;
     }
     recoverAfterWake() {
-        if (this.stopped)
-            return;
-        this.generation += 1;
-        this.cancelActiveCommands();
+        // No cached transport state; the next read re-reads credentials and re-queries.
     }
-    stop() {
-        if (this.stopping)
-            return this.stopping;
-        this.stopped = true;
-        this.generation += 1;
-        const active = [...this.activeCommands];
-        for (const command of active)
-            command.cancel();
-        this.stopping = Promise.allSettled(active.map(({ result }) => result)).then(() => undefined);
-        return this.stopping;
-    }
-    stopImmediately() {
-        this.stopped = true;
-        this.generation += 1;
-        this.cancelActiveCommands();
-    }
-    isCurrent(generation) {
-        return !this.stopped && generation === this.generation;
-    }
-    cancelActiveCommands() {
-        for (const command of this.activeCommands)
-            command.cancel();
-    }
-}
-async function resolveTrustedClaudeExecutable(candidate, policy = {}) {
-    if (!isAbsolute(candidate))
-        return undefined;
-    try {
-        const resolved = await realpath(candidate);
-        if (!isAbsolute(resolved))
-            return undefined;
-        const metadata = await stat(resolved);
-        if (!isTrustedExecutableMetadata(metadata, policy) || !await hasTrustedParentChains(candidate, resolved, policy)) {
-            return undefined;
+    /** No background transport to stop: every read is self-contained. */
+    async stop() { }
+    stopImmediately() { }
+    async getUsage() {
+        const credential = await this.safeReadCredentials();
+        if (!credential.ok)
+            return failure("authentication");
+        if (credential.expiresAt !== undefined && credential.expiresAt <= this.now()) {
+            return failure("authentication");
         }
-        await access(resolved, constants$1.X_OK);
-        return { candidate, executable: resolved, dev: metadata.dev, ino: metadata.ino };
-    }
-    catch {
-        return undefined;
-    }
-}
-async function validateTrustedClaudeExecutable(identity, policy = {}) {
-    try {
-        const candidateTarget = await realpath(identity.candidate);
-        const executableTarget = await realpath(identity.executable);
-        if (candidateTarget !== identity.executable || executableTarget !== identity.executable) {
-            return false;
+        let value;
+        try {
+            value = await this.fetchUsage(credential.accessToken);
         }
-        const metadata = await stat(identity.executable);
-        if (metadata.dev !== identity.dev
-            || metadata.ino !== identity.ino
-            || !isTrustedExecutableMetadata(metadata, policy)
-            || !await hasTrustedParentChains(identity.candidate, identity.executable, policy))
-            return false;
-        await access(identity.executable, constants$1.X_OK);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-function isTrustedExecutableMetadata(metadata, policy) {
-    const uid = policy.uid ?? process.getuid?.();
-    return metadata.isFile()
-        && uid !== undefined
-        && (metadata.uid === uid || metadata.uid === 0)
-        && (metadata.mode & 0o022) === 0;
-}
-async function hasTrustedParentChains(candidate, executable, policy) {
-    const candidateParent = await realpath(dirname(candidate));
-    const executableParent = await realpath(dirname(executable));
-    return await hasTrustedDirectoryChain(candidateParent, policy)
-        && (candidateParent === executableParent || await hasTrustedDirectoryChain(executableParent, policy));
-}
-async function hasTrustedDirectoryChain(start, policy) {
-    let directory = start;
-    while (true) {
-        const metadata = await stat(directory);
-        const uid = policy.uid ?? process.getuid?.();
-        if (!metadata.isDirectory()
-            || uid === undefined
-            || (metadata.uid !== uid && metadata.uid !== 0)
-            || !isTrustedDirectoryMode(directory, metadata, uid, policy))
-            return false;
-        const parent = dirname(directory);
-        if (parent === directory)
-            return true;
-        directory = parent;
-    }
-}
-function isTrustedDirectoryMode(directory, metadata, uid, policy) {
-    if ((metadata.mode & 0o002) !== 0)
-        return false;
-    if ((metadata.mode & 0o020) === 0)
-        return true;
-    return isTrustedHomebrewDirectory(directory, metadata, { ...policy, uid });
-}
-function isTrustedHomebrewDirectory(directory, metadata, policy = {}) {
-    const uid = policy.uid ?? process.getuid?.();
-    const platform = policy.platform ?? process.platform;
-    const adminGid = policy.adminGid ?? 80;
-    const prefixes = policy.homebrewPrefixes ?? ["/opt/homebrew", "/usr/local"];
-    if (platform !== "darwin" || uid === undefined || metadata.uid !== uid || metadata.gid !== adminGid
-        || (metadata.mode & 0o020) === 0 || (metadata.mode & 0o002) !== 0)
-        return false;
-    // macOS admin (gid 80) members already hold local administrative authority; no other writable group is trusted.
-    return prefixes.some((prefix) => {
-        const fromPrefix = relative(prefix, directory);
-        return fromPrefix === "" || (!fromPrefix.startsWith("..") && !isAbsolute(fromPrefix));
-    });
-}
-function claudeEnvironment() {
-    const username = userInfo().username;
-    const env = {
-        HOME: homedir(),
-        PATH: FIXED_PATH$2,
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
-        USER: username,
-        LOGNAME: username,
-        SHELL: "/bin/zsh",
-        TERM: "dumb",
-    };
-    for (const name of ["TMPDIR", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME"]) {
-        const value = process.env[name];
-        if (value)
-            env[name] = value;
-    }
-    return env;
-}
-function runCommand(executable, args, options) {
-    return hardDeadlineCommand(options.timeoutMs, ({ resolve, reject }) => execFile(executable, [...args], {
-        encoding: "utf8",
-        env: { ...options.env },
-        maxBuffer: options.maxStdoutBytes,
-        timeout: options.timeoutMs,
-        killSignal: "SIGKILL",
-        shell: false,
-    }, (error, stdout) => {
-        if (error) {
-            if (typeof error.code === "number")
-                resolve({ exitCode: error.code, stdout });
-            else
-                reject(error);
-            return;
+        catch (error) {
+            return { ok: false, error: sanitizeUsageError(error, "unavailable") };
         }
-        resolve({ exitCode: 0, stdout });
-    }));
-}
-function parseClaudeUsage(stdout) {
-    let payload;
-    try {
-        payload = JSON.parse(stdout);
+        const windows = parseClaudeOauthUsage(value);
+        if (!windows)
+            return failure("invalid-response");
+        return { ok: true, usage: { windows, observedAt: this.now() } };
     }
-    catch {
-        return undefined;
-    }
-    if (!isRecord$7(payload) || typeof payload.result !== "string" || !hasZeroInference(payload)) {
-        return undefined;
-    }
-    const windows = {};
-    for (const line of payload.result.split(/\r?\n/)) {
-        const session = /^\s*Current session:\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
-        if (session)
-            windows.session = parseWindow$1(session[1]);
-        const week = /^\s*Current week \(all models\):\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
-        if (week)
-            windows.week = parseWindow$1(week[1]);
-    }
-    return windows.session && windows.week ? windows : undefined;
-}
-function parseWindow$1(value) {
-    const usedPercent = Number(value);
-    return Number.isFinite(usedPercent) && usedPercent >= 0 && usedPercent <= 100
-        ? { usedPercent }
-        : undefined;
-}
-function hasZeroInference(payload) {
-    if (payload.num_turns !== 0
-        || payload.duration_api_ms !== 0
-        || payload.total_cost_usd !== 0
-        || !isRecord$7(payload.usage)
-        || !isRecord$7(payload.modelUsage)
-        || Object.keys(payload.modelUsage).length !== 0)
-        return false;
-    const totals = hasOnlyZeroUsageTotals(payload.usage);
-    return totals.valid && totals.found;
-}
-function hasOnlyZeroUsageTotals(value) {
-    let found = false;
-    for (const [key, item] of Object.entries(value)) {
-        if (key.endsWith("_tokens") || key.endsWith("_requests")) {
-            if (typeof item !== "number" || !Number.isFinite(item) || item !== 0) {
-                return { valid: false, found: true };
-            }
-            found = true;
+    async safeReadCredentials() {
+        try {
+            return await this.readCredentials();
         }
-        else if (isRecord$7(item)) {
-            const nested = hasOnlyZeroUsageTotals(item);
-            if (!nested.valid)
-                return nested;
-            found ||= nested.found;
+        catch {
+            return { ok: false };
         }
     }
-    return { valid: true, found };
+    async fetchUsage(accessToken) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+        let response;
+        try {
+            response = await this.fetcher(CLAUDE_OAUTH_USAGE_URL, {
+                method: "GET",
+                headers: {
+                    authorization: `Bearer ${accessToken}`,
+                    accept: "application/json",
+                    "anthropic-beta": "oauth-2025-04-20",
+                    "anthropic-version": "2023-06-01",
+                },
+                redirect: "manual",
+                cache: "no-store",
+                signal: controller.signal,
+            });
+        }
+        catch {
+            throw new UsageProviderError("unavailable");
+        }
+        finally {
+            clearTimeout(timer);
+        }
+        if (response.status === 401 || response.status === 403) {
+            void response.body?.cancel().catch(() => undefined);
+            throw new UsageProviderError("authentication");
+        }
+        if (!response.ok || response.redirected || response.status >= 300) {
+            void response.body?.cancel().catch(() => undefined);
+            throw new UsageProviderError("unavailable");
+        }
+        try {
+            return await response.json();
+        }
+        catch {
+            throw new UsageProviderError("invalid-response");
+        }
+        finally {
+            void response.body?.cancel().catch(() => undefined);
+        }
+    }
 }
 function failure(code) {
     return { ok: false, error: new UsageProviderError(code) };
 }
-function errorCode(error) {
-    return isRecord$7(error) ? error.code : undefined;
+/** `five_hour` → session, `seven_day` → week; anything else is ignored for now. */
+function parseClaudeOauthUsage(value) {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return undefined;
+    const windows = {};
+    const fiveHour = parseOauthWindow(value.five_hour, 300);
+    if (fiveHour)
+        windows.session = fiveHour;
+    const sevenDay = parseOauthWindow(value.seven_day, 10_080);
+    if (sevenDay)
+        windows.week = sevenDay;
+    return windows.session || windows.week ? windows : undefined;
 }
-function isTimeout(error) {
-    return errorCode(error) === "ETIMEDOUT" || (isRecord$7(error) && error.killed === true);
+function parseOauthWindow(value, windowMinutes) {
+    if (typeof value !== "object" || value === null)
+        return undefined;
+    const utilization = value.utilization;
+    if (typeof utilization !== "number" || !Number.isFinite(utilization) || utilization < 0)
+        return undefined;
+    const resetsAt = value.resets_at;
+    return {
+        usedPercent: Math.min(utilization, 100),
+        windowMinutes,
+        ...(typeof resetsAt === "string" && resetsAt !== "" ? { resetsAt } : {}),
+    };
 }
-function isMaxBufferError(error) {
-    return errorCode(error) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+/** Default credential reader: macOS Keychain first, then `~/.claude/.credentials.json`. */
+async function readStoredClaudeCredentials() {
+    const raw = await readKeychainSecret();
+    const parsed = parseStoredCredentials(raw ?? readCredentialsFile());
+    if (!parsed)
+        throw new UsageProviderError("authentication");
+    return parsed;
 }
-function isRecord$7(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+function readKeychainSecret() {
+    return new Promise((resolve) => {
+        execFile("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"], { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: KEYCHAIN_MAX_STDOUT_BYTES }, (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined));
+    });
+}
+function readCredentialsFile() {
+    try {
+        return readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8");
+    }
+    catch {
+        return undefined;
+    }
+}
+function parseStoredCredentials(raw) {
+    if (!raw)
+        return undefined;
+    let value;
+    try {
+        value = JSON.parse(raw);
+    }
+    catch {
+        return undefined;
+    }
+    if (typeof value !== "object" || value === null)
+        return undefined;
+    const oauth = value.claudeAiOauth;
+    if (typeof oauth !== "object" || oauth === null)
+        return undefined;
+    const accessToken = oauth.accessToken;
+    if (typeof accessToken !== "string" || accessToken === "")
+        return undefined;
+    const expiresAt = oauth.expiresAt;
+    return {
+        ok: true,
+        accessToken,
+        ...(typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { expiresAt } : {}),
+    };
 }
 
 const CLAUDE_COORDINATOR_OPTIONS = {
@@ -10246,24 +10043,29 @@ function renderClaudeFeedback(result, _showCountdown = false) {
     };
 }
 function renderCodexFeedback(result, showCountdown = false) {
+    const session = result.ok ? result.usage.windows.session : undefined;
     const week = result.ok ? result.usage.windows.week : undefined;
-    if (!result.ok || !week) {
+    if (!result.ok || (!session && !week)) {
         return {
             title: "GPT / OPENAI",
-            period: "WEEKLY",
-            value: "--",
-            indicator: bar(undefined),
             status: "NO DATA",
+            sessionValue: "--",
+            sessionBar: bar(undefined),
+            weekValue: "--",
+            weekBar: bar(undefined),
         };
     }
-    const weekly = Math.min(100, Math.max(0, week.usedPercent));
-    const countdown = showCountdown && week.resetsAt ? formatCountdown(week.resetsAt) : null;
+    // Available partial windows render (parity with Claude); only both missing is NO DATA.
+    const countdown = showCountdown && week?.resetsAt ? formatCountdown(week.resetsAt) : null;
+    const sessionDisplay = usageDisplay(session?.usedPercent, result.stale);
+    const weekDisplay = usageDisplay(week?.usedPercent, result.stale);
     return {
         title: "GPT / OPENAI",
-        period: "WEEKLY",
-        value: countdown ?? `${Math.round(weekly)}%`,
-        indicator: bar(week.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
+        sessionValue: sessionDisplay.value,
+        sessionBar: sessionDisplay.bar,
+        weekValue: countdown ?? weekDisplay.value,
+        weekBar: weekDisplay.bar,
     };
 }
 function renderGrokFeedback(result, showCountdown = false) {
@@ -10327,7 +10129,7 @@ let ClaudeUsage = (() => {
         }
         coordinator;
         lastResult = null;
-        constructor(coordinator = new UsageProviderCoordinator(new ClaudeUsageProvider(), CLAUDE_COORDINATOR_OPTIONS)) {
+        constructor(coordinator = new UsageProviderCoordinator(new ClaudeOauthUsageProvider(), CLAUDE_COORDINATOR_OPTIONS)) {
             super();
             this.coordinator = coordinator;
         }
@@ -10366,6 +10168,95 @@ let ClaudeUsage = (() => {
     });
     return _classThis;
 })();
+
+async function resolveTrustedClaudeExecutable(candidate, policy = {}) {
+    if (!isAbsolute(candidate))
+        return undefined;
+    try {
+        const resolved = await realpath(candidate);
+        if (!isAbsolute(resolved))
+            return undefined;
+        const metadata = await stat(resolved);
+        if (!isTrustedExecutableMetadata(metadata, policy) || !await hasTrustedParentChains(candidate, resolved, policy)) {
+            return undefined;
+        }
+        await access(resolved, constants$1.X_OK);
+        return { candidate, executable: resolved, dev: metadata.dev, ino: metadata.ino };
+    }
+    catch {
+        return undefined;
+    }
+}
+async function validateTrustedClaudeExecutable(identity, policy = {}) {
+    try {
+        const candidateTarget = await realpath(identity.candidate);
+        const executableTarget = await realpath(identity.executable);
+        if (candidateTarget !== identity.executable || executableTarget !== identity.executable) {
+            return false;
+        }
+        const metadata = await stat(identity.executable);
+        if (metadata.dev !== identity.dev
+            || metadata.ino !== identity.ino
+            || !isTrustedExecutableMetadata(metadata, policy)
+            || !await hasTrustedParentChains(identity.candidate, identity.executable, policy))
+            return false;
+        await access(identity.executable, constants$1.X_OK);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function isTrustedExecutableMetadata(metadata, policy) {
+    const uid = policy.uid ?? process.getuid?.();
+    return metadata.isFile()
+        && uid !== undefined
+        && (metadata.uid === uid || metadata.uid === 0)
+        && (metadata.mode & 0o022) === 0;
+}
+async function hasTrustedParentChains(candidate, executable, policy) {
+    const candidateParent = await realpath(dirname(candidate));
+    const executableParent = await realpath(dirname(executable));
+    return await hasTrustedDirectoryChain(candidateParent, policy)
+        && (candidateParent === executableParent || await hasTrustedDirectoryChain(executableParent, policy));
+}
+async function hasTrustedDirectoryChain(start, policy) {
+    let directory = start;
+    while (true) {
+        const metadata = await stat(directory);
+        const uid = policy.uid ?? process.getuid?.();
+        if (!metadata.isDirectory()
+            || uid === undefined
+            || (metadata.uid !== uid && metadata.uid !== 0)
+            || !isTrustedDirectoryMode(directory, metadata, uid, policy))
+            return false;
+        const parent = dirname(directory);
+        if (parent === directory)
+            return true;
+        directory = parent;
+    }
+}
+function isTrustedDirectoryMode(directory, metadata, uid, policy) {
+    if ((metadata.mode & 0o002) !== 0)
+        return false;
+    if ((metadata.mode & 0o020) === 0)
+        return true;
+    return isTrustedHomebrewDirectory(directory, metadata, { ...policy, uid });
+}
+function isTrustedHomebrewDirectory(directory, metadata, policy = {}) {
+    const uid = policy.uid ?? process.getuid?.();
+    const platform = policy.platform ?? process.platform;
+    const adminGid = policy.adminGid ?? 80;
+    const prefixes = policy.homebrewPrefixes ?? ["/opt/homebrew", "/usr/local"];
+    if (platform !== "darwin" || uid === undefined || metadata.uid !== uid || metadata.gid !== adminGid
+        || (metadata.mode & 0o020) === 0 || (metadata.mode & 0o002) !== 0)
+        return false;
+    // macOS admin (gid 80) members already hold local administrative authority; no other writable group is trusted.
+    return prefixes.some((prefix) => {
+        const fromPrefix = relative(prefix, directory);
+        return fromPrefix === "" || (!fromPrefix.startsWith("..") && !isAbsolute(fromPrefix));
+    });
+}
 
 /**
  * Allowed environment variables — same policy as the Grok transport.
@@ -13299,7 +13190,9 @@ class TransitioningProviderStatusReporter {
 }
 
 const statusReporter = new TransitioningProviderStatusReporter((message) => streamDeck.logger.warn(message));
-const claudeProvider = new ClaudeUsageProvider();
+// The CLI -p /usage output no longer carries limit percentages; the OAuth provider
+// reuses Claude Code's stored session (quorb-style). Old CLI provider kept for reference.
+const claudeProvider = new ClaudeOauthUsageProvider();
 const claudeCoordinator = new UsageProviderCoordinator(claudeProvider, { ...CLAUDE_COORDINATOR_OPTIONS, statusReporter });
 const codexProvider = new CodexUsageProvider();
 const codexCoordinator = new UsageProviderCoordinator(codexProvider, { statusReporter });

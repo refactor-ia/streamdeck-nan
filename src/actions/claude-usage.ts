@@ -7,7 +7,7 @@ import {
   WillAppearEvent,
   streamDeck,
 } from "@elgato/streamdeck";
-import { ClaudeUsageProvider } from "../providers/claude/claude-usage-provider.js";
+import { ClaudeOauthUsageProvider } from "../providers/claude/claude-oauth-usage-provider.js";
 import { CLAUDE_COORDINATOR_OPTIONS } from "../providers/claude/claude-coordinator-options.js";
 import { RefreshingAction, type RefreshSettings } from "../refreshing-action.js";
 import { UsageProviderCoordinator } from "../usage/provider-coordinator.js";
@@ -21,7 +21,7 @@ export class ClaudeUsage extends RefreshingAction {
 
   constructor(
     coordinator = new UsageProviderCoordinator(
-      new ClaudeUsageProvider(),
+      new ClaudeOauthUsageProvider(),
       CLAUDE_COORDINATOR_OPTIONS,
     ),
   ) {

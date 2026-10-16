@@ -27,10 +27,11 @@ export interface ClaudeFeedback {
 export interface CodexFeedback {
   readonly [key: string]: FeedbackValue;
   readonly title: "GPT / OPENAI";
-  readonly period: "WEEKLY";
-  readonly value: string;
-  readonly indicator: BarFeedback;
   readonly status: "" | "NO DATA" | "STALE";
+  readonly sessionValue: string;
+  readonly sessionBar: BarFeedback;
+  readonly weekValue: string;
+  readonly weekBar: BarFeedback;
 }
 
 export interface GrokFeedback {
@@ -218,26 +219,31 @@ export function renderClaudeFeedback(result: CoordinatedUsageResult, _showCountd
   };
 }
 
+
 export function renderCodexFeedback(result: CoordinatedUsageResult, showCountdown = false): CodexFeedback {
+  const session = result.ok ? result.usage.windows.session : undefined;
   const week = result.ok ? result.usage.windows.week : undefined;
-  if (!result.ok || !week) {
+  if (!result.ok || (!session && !week)) {
     return {
       title: "GPT / OPENAI",
-      period: "WEEKLY",
-      value: "--",
-      indicator: bar(undefined),
       status: "NO DATA",
+      sessionValue: "--",
+      sessionBar: bar(undefined),
+      weekValue: "--",
+      weekBar: bar(undefined),
     };
   }
-
-  const weekly = Math.min(100, Math.max(0, week.usedPercent));
-  const countdown = showCountdown && week.resetsAt ? formatCountdown(week.resetsAt) : null;
+  // Available partial windows render (parity with Claude); only both missing is NO DATA.
+  const countdown = showCountdown && week?.resetsAt ? formatCountdown(week.resetsAt) : null;
+  const sessionDisplay = usageDisplay(session?.usedPercent, result.stale);
+  const weekDisplay = usageDisplay(week?.usedPercent, result.stale);
   return {
     title: "GPT / OPENAI",
-    period: "WEEKLY",
-    value: countdown ?? `${Math.round(weekly)}%`,
-    indicator: bar(week.usedPercent, result.stale),
     status: result.stale ? "STALE" : "",
+    sessionValue: sessionDisplay.value,
+    sessionBar: sessionDisplay.bar,
+    weekValue: countdown ?? weekDisplay.value,
+    weekBar: weekDisplay.bar,
   };
 }
 

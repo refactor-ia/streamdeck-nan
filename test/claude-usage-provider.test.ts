@@ -344,16 +344,15 @@ test("claude-usage-provider rejects nonzero telemetry including nested token and
   ]) assert.equal(await payloadErrorCode(payload), "invalid-response");
 });
 
-test("versioned bundle contains hardened CLI telemetry and no Claude private credential path", async () => {
+test("versioned bundle reads Claude usage via the stored OAuth session with bounded keychain reads", async () => {
   const { readFile } = await import("node:fs/promises");
   const bundle = await readFile("com.refactor-ia.nan.sdPlugin/bin/plugin.js", "utf8");
-  assert.match(bundle, /"-p",\s*"\/usage",\s*"--tools",\s*"",\s*"--output-format",\s*"json"/);
-  assert.doesNotMatch(bundle, /--safe-mode/);
-  assert.match(bundle, /realpath/);
-  assert.match(bundle, /shell:\s*false/);
+  assert.match(bundle, /api\/oauth\/usage/);
+  assert.match(bundle, /Claude Code-credentials/);
+  assert.match(bundle, /oauth-2025-04-20/);
   assert.doesNotMatch(bundle, /NAN_API_KEY/);
-  assert.doesNotMatch(bundle, /api\/oauth\/usage/);
-  assert.doesNotMatch(bundle, /Claude Code-credentials/);
+  // The stored refresh token is never read or refreshed by the plugin.
+  assert.doesNotMatch(bundle, /refreshToken/);
 });
 
 function providerWith(
