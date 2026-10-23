@@ -1,67 +1,29 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
-  "id": "OpenAIUsage",
+  "id": "OpenaiUsage",
   "items": [
     {
       "key": "title",
       "type": "text",
-      "rect": [
-        8,
-        4,
-        184,
-        24
-      ],
+      "rect": [8, 4, 120, 24],
       "alignment": "left",
-      "font": {
-        "size": 18,
-        "weight": 800
-      },
-      "value": "GPT / OPENAI",
+      "font": { "size": 18, "weight": 800 },
+      "value": "GPT",
       "color": "#ffffff"
     },
     {
-      "key": "period",
+      "key": "status",
       "type": "text",
-      "rect": [
-        8,
-        36,
-        70,
-        22
-      ],
-      "alignment": "left",
-      "font": {
-        "size": 14,
-        "weight": 800
-      },
-      "value": "WEEKLY",
+      "rect": [130, 8, 62, 16],
+      "alignment": "right",
+      "font": { "size": 9, "weight": 800 },
+      "value": "",
       "color": "#9a8fb8"
     },
     {
-      "key": "value",
-      "type": "text",
-      "rect": [
-        80,
-        28,
-        112,
-        32
-      ],
-      "alignment": "right",
-      "font": {
-        "size": 22,
-        "weight": 800
-      },
-      "value": "--",
-      "color": "#ffffff"
-    },
-    {
-      "key": "indicator",
+      "key": "sessionBar",
       "type": "bar",
-      "rect": [
-        8,
-        70,
-        184,
-        12
-      ],
+      "rect": [8, 38, 140, 12],
       "bar_bg_c": "#2c2144",
       "bar_fill_c": "#7127ff",
       "border_w": 0,
@@ -69,21 +31,32 @@
       "value": 0
     },
     {
-      "key": "status",
+      "key": "sessionValue",
       "type": "text",
-      "rect": [
-        8,
-        86,
-        184,
-        12
-      ],
+      "rect": [152, 30, 40, 26],
       "alignment": "right",
-      "font": {
-        "size": 9,
-        "weight": 800
-      },
-      "value": "",
-      "color": "#9a8fb8"
+      "font": { "size": 15, "weight": 800 },
+      "value": "--",
+      "color": "#ffffff"
+    },
+    {
+      "key": "weekBar",
+      "type": "bar",
+      "rect": [8, 72, 140, 12],
+      "bar_bg_c": "#2c2144",
+      "bar_fill_c": "#7127ff",
+      "border_w": 0,
+      "subtype": 0,
+      "value": 0
+    },
+    {
+      "key": "weekValue",
+      "type": "text",
+      "rect": [152, 64, 40, 26],
+      "alignment": "right",
+      "font": { "size": 15, "weight": 800 },
+      "value": "--",
+      "color": "#ffffff"
     }
   ]
 }
