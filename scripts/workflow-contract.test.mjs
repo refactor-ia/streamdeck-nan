@@ -94,6 +94,7 @@ test("CI triggers pushes and pull requests with read-only permissions", async ()
   assert.doesNotMatch(JSON.stringify(ci), /gitleaks\/gitleaks-action|GITHUB_TOKEN/);
   assert.equal(ci.jobs["build-and-test"].steps.find(({ uses }) => uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
   assert.ok(Object.values(ci.jobs).flatMap(({ steps }) => steps).every(({ env }) => !Object.keys(env ?? {}).some((name) => name.startsWith("APPLE_"))));
+  assert.doesNotMatch(JSON.stringify(ci), /APPLE_|SIGN_IDENTITY|notarize/i);
   const buildSteps = ci.jobs["build-and-test"].steps;
   assertTrackedBundleGatePrecedesBuild(buildSteps);
   assertCiBuildsExecutableHelperBeforePackaging(buildSteps);
@@ -131,7 +132,7 @@ test("release uses read-only packaging, artifact handoff, and isolated write pub
   assert.equal(releaseGitleaks.env, undefined);
   assert.doesNotMatch(JSON.stringify(release), /gitleaks\/gitleaks-action|GITHUB_TOKEN/);
   assert.equal(release.jobs.package.steps.find(({ uses }) => uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
-  assert.doesNotMatch(JSON.stringify(release), /APPLE_|sign-nan-keychain|notarize-streamdeck|NOTARIZATION\.json/i);
+  assert.doesNotMatch(JSON.stringify(release.jobs.package), /APPLE_|sign-nan-keychain|notarize-streamdeck|NOTARIZATION\.json/i);
   const buildIndex = packageCommands.indexOf("pnpm build:nan-keychain");
   const helperCheckIndex = packageCommands.indexOf("test -x com.refactor-ia.nan.sdPlugin/bin/nan-keychain");
   const packIndex = packageCommands.indexOf("pnpm release:pack:verify");
@@ -142,4 +143,28 @@ test("release uses read-only packaging, artifact handoff, and isolated write pub
   assert.match(upload.with.path, /dist\/SHA256SUMS/);
   assert.match(publishCommands, /release-assets\.mjs.*clean/);
   assert.match(publishCommands, /release-assets\.mjs.*exact/);
+});
+
+test("signing and notarization live only in the release publish job", async () => {
+  const release = await workflow("release.yml");
+  const publish = release.jobs.publish;
+  const publishJson = JSON.stringify(publish);
+  assert.equal(publish["runs-on"], "macos-latest");
+  const commands = publish.steps.map(({ run }) => run ?? "").join("\n");
+  const signIndex = commands.indexOf("pnpm build:nan-keychain");
+  const packIndex = commands.indexOf("pnpm release:pack");
+  const notarizeIndex = commands.indexOf("node scripts/notarize-plugin.mjs");
+  const releaseIndex = commands.indexOf("gh release upload");
+  assert.ok(signIndex >= 0, "publish job must build the signed helper");
+  assert.ok(signIndex < packIndex, "signed helper must exist before packaging");
+  assert.ok(packIndex < notarizeIndex, "notarization must submit the packaged artifact");
+  assert.ok(notarizeIndex < releaseIndex, "notarization must precede release upload");
+  const envNames = new Set(publish.steps.flatMap(({ env }) => Object.keys(env ?? {})));
+  for (const name of ["SIGN_IDENTITY", "APPLE_AC_API_KEY_P8", "APPLE_AC_KEY_ID", "APPLE_AC_ISSUER"]) {
+    assert.ok(envNames.has(name), `publish job must declare ${name}`);
+  }
+  assert.ok(publish.steps.every(({ env }) => !Object.keys(env ?? {}).some((name) => /token/i.test(name))), "publish signing env must not carry tokens");
+  assert.match(commands, /--timestamp=none/);
+  assert.match(commands, /hardened/);
+  assert.match(publishJson, /sha256/i);
 });
