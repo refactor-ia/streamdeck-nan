@@ -167,4 +167,5 @@ test("signing and notarization live only in the release publish job", async () =
   assert.match(commands, /--timestamp=none/);
   assert.match(commands, /hardened/);
   assert.match(publishJson, /sha256/i);
+  assert.doesNotMatch(publishJson, /SHA256SUMS"/);
 });

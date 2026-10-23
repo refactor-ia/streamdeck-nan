@@ -89,6 +89,7 @@ jobs:
         run: |
           (cd dist && shasum -a 256 *.streamDeckPlugin > SHA256SUMS)
           node scripts/release-contract.mjs "$GITHUB_REF_NAME"
+          git diff --exit-code -- com.refactor-ia.nan.sdPlugin/manifest.json com.refactor-ia.nan.sdPlugin/bin/plugin.js
       - name: Notarize signed artifact (fail closed)
         env:
           APPLE_AC_API_KEY_P8: ${{ secrets.APPLE_AC_API_KEY_P8 }}
@@ -111,4 +112,5 @@ jobs:
           plugin="$(basename dist/*.streamDeckPlugin)"
           node scripts/release-assets.mjs "$GITHUB_REF_NAME" clean "$plugin" SHA256SUMS
           gh release upload "$GITHUB_REF_NAME" dist/*.streamDeckPlugin dist/SHA256SUMS --clobber
-          node scripts/release-assets.mjs "$GITHUB_REF_NAME" exact "$plugin" SHA256SUMS"
+          node scripts/release-assets.mjs "$GITHUB_REF_NAME" exact "$plugin" SHA256SUMS
+

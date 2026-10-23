@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,6 +83,7 @@ export async function notarizePlugin({
       throw new Error("Notarization log could not be read; refusing to treat the submission as accepted");
     }
     acceptedStatus(logJson);
+    process.stdout.write(logJson);
     return { submissionId, logPath };
   } finally {
     await rm(logDirectory, { recursive: true, force: true });
