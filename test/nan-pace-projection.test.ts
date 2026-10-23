@@ -29,6 +29,22 @@ test("no usage projects 0% at period end", () => {
   assert.deepEqual(projectMonthlyPace(input({ used: 0 })), { kind: "period-end-percent", percent: 0 });
 });
 
+test("near-cap usage clamps at 99.9% without changing the projection below it", () => {
+  const cap = 1000;
+  const threshold = cap * 0.999;
+  const epsilon = cap * Number.EPSILON;
+  const belowThreshold = threshold - epsilon;
+  assert.ok(belowThreshold < threshold);
+  assert.ok(cap - epsilon < cap);
+  assert.deepEqual(projectMonthlyPace(input({ used: belowThreshold, cap })), {
+    kind: "cap-date",
+    at: new Date(startMs + cap / (belowThreshold / (10 * DAY))).toISOString(),
+  });
+  for (const used of [threshold, cap - epsilon, 999.9999999999999]) {
+    assert.deepEqual(projectMonthlyPace(input({ used, cap })), { kind: "period-end-percent", percent: 100 });
+  }
+});
+
 test("already at or over the cap reports capped", () => {
   assert.deepEqual(projectMonthlyPace(input({ used: 1000 })), { kind: "capped" });
   assert.deepEqual(projectMonthlyPace(input({ used: 1500 })), { kind: "capped" });
