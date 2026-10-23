@@ -9863,7 +9863,8 @@ class NanSettingsWriteQueue {
  * Edge cases return `null` (no projection) rather than a misleading number:
  * no/zero cap, missing or invalid period bounds, end <= start, `now` outside the
  * period, negative usage, or less than MIN_ELAPSED_MS elapsed (too noisy).
- * Usage at or above the cap yields `capped`. Zero usage projects 0%.
+ * Usage at or above the cap yields `capped`. Usage from 99.9% up to the cap
+ * projects 100% at period end. Zero usage projects 0%.
  * Staleness is the caller's concern: stale data must not be projected.
  */
 const MIN_ELAPSED_MS = 6 * 3_600_000;
@@ -9879,6 +9880,8 @@ function projectMonthlyPace({ used, cap, periodStart, periodEnd, now }) {
     const elapsed = now - start;
     if (elapsed < MIN_ELAPSED_MS)
         return null;
+    if (used >= cap * 0.999)
+        return { kind: "period-end-percent", percent: 100 };
     const rate = used / elapsed; // tokens per ms
     const capHit = rate > 0 ? start + cap / rate : Number.POSITIVE_INFINITY;
     if (capHit < end)
@@ -9946,7 +9949,7 @@ function monthlyDetail(state, model, now) {
 }
 function formatPace(pace) {
     switch (pace.kind) {
-        case "cap-date": return `CAP ${formatResetDate(pace.at)}`;
+        case "cap-date": return `CAP ~${formatResetDate(pace.at)}`;
         case "capped": return "CAP REACHED";
         // A rounded projection of 0% would read as "zero by reset"; any nonzero rate shows <1%.
         case "period-end-percent": return pace.percent === 0 ? "<1% AT RESET" : `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
