@@ -109,5 +109,5 @@ test("models with different resetAt dates each show their own projection", () =>
   };
   // early resets before its projected cap date (Oct 26): the projection is bounded by the model reset.
   assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "early" }, octFirst + 10 * DAY).unit, "40% · ~56% AT RESET");
-  assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "late" }, octFirst + 10 * DAY).unit, "40% · CAP OCT 26");
+  assert.equal(renderNanDashboardFeedback({ source: "dashboard", quota, stale: false }, { model: "late" }, octFirst + 10 * DAY).unit, "40% · CAP ~OCT 26");
 });
