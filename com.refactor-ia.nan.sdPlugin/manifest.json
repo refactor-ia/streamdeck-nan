@@ -89,7 +89,7 @@
       "Encoder": {
         "layout": "layouts/nan.json",
         "TriggerDescription": {
-          "Touch": "Refresh dashboard quota"
+          "Touch": "Press: toggle history · Hold: refresh"
         }
       },
       "States": [

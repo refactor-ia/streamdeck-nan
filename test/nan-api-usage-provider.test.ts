@@ -140,3 +140,69 @@ test("strict schema validation rejects drifted or inconsistent payloads", () => 
   for (const value of bad) assert.throws(() => parseNanApiUsage(value), (error: NanApiUsageError) => error.kind === "schema", JSON.stringify(value)?.slice(0, 80));
   assert.equal(parseNanApiUsage({ ...report, all_time: { ...report.all_time, cached_at: undefined } }).allTime.cachedAt, undefined);
 });
+
+test("fetches the daily series window and follows cursor pagination until has_more is false", async () => {
+  const calls: Recorded[] = [];
+  const page = (rows: unknown[], hasMore: boolean, cursor?: string) => json({
+    object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14",
+    data: rows, totals: report.totals, all_time: report.all_time,
+    ...(hasMore ? { has_more: true, next_cursor: cursor } : { has_more: false }),
+  });
+  let turn = 0;
+  const client = new NanApiUsageClient(fetchOf(() => {
+    turn += 1;
+    return turn === 1
+      ? page([{ date: "2026-10-13", model: "glm5.3", prompt_tokens: 90581013, completion_tokens: 170176, total_tokens: 90751189, api_requests: 543 }], true, "MjAyNi0xMC0xM3xnbG01LjMtZmxhc2g")
+      : page([
+          { date: "2026-10-13", model: "mimo-v2.6-flash", prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, api_requests: 1 },
+          { date: "2026-10-14", model: "glm5.3", prompt_tokens: 4, completion_tokens: 5, total_tokens: 9, api_requests: 2 },
+        ], false);
+  }, calls), undefined, NOW);
+  const rows = await client.getDailyUsage(KEY);
+
+  assert.equal(calls.length, 2);
+  const first = new URL(calls[0].url);
+  assert.equal(`${first.origin}${first.pathname}`, NAN_API_USAGE_URL);
+  assert.deepEqual(Object.fromEntries(first.searchParams), { start_date: "2026-09-15", end_date: "2026-10-14", limit: "200" });
+  assert.equal(new URL(calls[1].url).searchParams.get("cursor"), "MjAyNi0xMC0xM3xnbG01LjMtZmxhc2g");
+  assert.equal(calls.every((call) => !call.url.includes(KEY)), true);
+  assert.deepEqual(rows, [
+    { date: "2026-10-13", model: "glm5.3", totalTokens: 90751189 },
+    { date: "2026-10-13", model: "mimo-v2.6-flash", totalTokens: 3 },
+    { date: "2026-10-14", model: "glm5.3", totalTokens: 9 },
+  ]);
+});
+
+test("the daily series window covers the last 30 days ending today, UTC", async () => {
+  const calls: Recorded[] = [];
+  const client = new NanApiUsageClient(fetchOf(() => json({ ...report, has_more: false }), calls), undefined, NOW);
+  await client.getDailyUsage(KEY);
+  const params = new URL(calls[0].url).searchParams;
+  assert.equal(params.get("start_date"), "2026-09-15");
+  assert.equal(params.get("end_date"), "2026-10-14");
+});
+
+test("stops pagination at a hard page cap instead of looping forever", async () => {
+  const calls: Recorded[] = [];
+  let pages = 0;
+  const client = new NanApiUsageClient(fetchOf(() => {
+    pages += 1;
+    return json({ object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14", data: [], totals: report.totals, all_time: report.all_time, has_more: true, next_cursor: `c${pages}` });
+  }, calls), undefined, NOW);
+  const kind = await kindOf(client.getDailyUsage(KEY));
+  assert.equal(kind, "transport");
+  assert.equal(pages, calls.length);
+  assert.ok(pages < 100, `expected the cap to fire, got ${pages} pages`);
+});
+
+test("maps daily-series schema violations to typed errors that never expose the key", async () => {
+  const run = (value: unknown) => new NanApiUsageClient(fetchOf(() => json(value)), undefined, NOW).getDailyUsage(KEY);
+  assert.equal(await kindOf(run({ object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14", data: [{ date: "2026-10-13", model: "glm5.3", total_tokens: -1 }], totals: report.totals, all_time: report.all_time, has_more: false })), "schema");
+  assert.equal(await kindOf(run({ object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14", data: [{ date: "2026-10-13", model: "glm5.3", total_tokens: 1 }], totals: report.totals, all_time: report.all_time, has_more: true })), "schema");
+  assert.equal(await kindOf(run({ object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14", data: "no", totals: report.totals, all_time: report.all_time, has_more: false })), "schema");
+});
+
+test("an empty daily series is valid", async () => {
+  const client = new NanApiUsageClient(fetchOf(() => json({ object: "usage.report", start_date: "2026-09-15", end_date: "2026-10-14", data: [], totals: report.totals, all_time: report.all_time, has_more: false })));
+  assert.deepEqual(await client.getDailyUsage(KEY), []);
+});

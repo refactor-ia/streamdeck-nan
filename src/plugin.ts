@@ -7,7 +7,7 @@ import { NanModelUsage } from "./actions/nan-model-usage.js";
 import { NanTotalTokensUsage, NanMonthlyTokensUsage } from "./actions/nan-metrics-usage.js";
 import { NanDashboardController } from "./actions/nan-dashboard-controller.js";
 import { NanDashboardLauncher } from "./actions/nan-dashboard-launcher.js";
-import { ClaudeUsageProvider } from "./providers/claude/claude-usage-provider.js";
+import { ClaudeOauthUsageProvider } from "./providers/claude/claude-oauth-usage-provider.js";
 import { CLAUDE_COORDINATOR_OPTIONS } from "./providers/claude/claude-coordinator-options.js";
 import { CodexUsageProvider } from "./providers/codex/codex-usage-provider.js";
 import { GrokUsageProvider } from "./providers/grok/grok-usage-provider.js";
@@ -17,7 +17,9 @@ import { TransitioningProviderStatusReporter } from "./usage/provider-status-rep
 
 const statusReporter = new TransitioningProviderStatusReporter((message) => streamDeck.logger.warn(message));
 
-const claudeProvider = new ClaudeUsageProvider();
+// The CLI -p /usage output no longer carries limit percentages; the OAuth provider
+// reuses Claude Code's stored session (quorb-style). Old CLI provider kept for reference.
+const claudeProvider = new ClaudeOauthUsageProvider();
 const claudeCoordinator = new UsageProviderCoordinator(
   claudeProvider,
   { ...CLAUDE_COORDINATOR_OPTIONS, statusReporter },

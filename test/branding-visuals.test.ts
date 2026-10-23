@@ -27,3 +27,18 @@ test("dial layouts only use brand palette colors", () => {
     for (const hex of hexes) assert.ok(palette.has(hex.toLowerCase() as never), `${file}: ${hex}`);
   }
 });
+
+test("dial layout items never overlap: an overlapping rect makes the app reject the whole layout", () => {
+  const dir = "com.refactor-ia.nan.sdPlugin/layouts";
+  for (const file of readdirSync(dir)) {
+    const { items } = JSON.parse(readFileSync(`${dir}/${file}`, "utf8")) as { items: { key: string; rect: [number, number, number, number] }[] };
+    for (let i = 0; i < items.length; i += 1) {
+      for (let j = i + 1; j < items.length; j += 1) {
+        const [ax, ay, aw, ah] = items[i]!.rect;
+        const [bx, by, bw, bh] = items[j]!.rect;
+        const overlaps = ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+        assert.ok(!overlaps, `${file}: '${items[j]!.key}' overlaps '${items[i]!.key}'`);
+      }
+    }
+  }
+});

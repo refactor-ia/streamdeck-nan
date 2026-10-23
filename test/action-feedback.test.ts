@@ -83,10 +83,11 @@ test("action-feedback preserves values, rounding, and bounds", () => {
   });
   assert.deepEqual(renderCodexFeedback(result), {
     title: "GPT / OPENAI",
-    period: "WEEKLY",
-    value: "100%",
-    indicator: { value: 100, bar_fill_c: "#ff5470" },
     status: "",
+    sessionValue: "0%",
+    sessionBar: { value: 0, bar_fill_c: "#7127ff" },
+    weekValue: "100%",
+    weekBar: { value: 100, bar_fill_c: "#ff5470" },
   });
 });
 
@@ -99,10 +100,22 @@ test("action-feedback renders available partial windows without inventing values
     weeklyValue: "42%",
     weeklyBar: { value: 42.4, bar_fill_c: "#7127ff" },
   });
-  assert.equal(
-    renderCodexFeedback(success({ session: { usedPercent: 25 } })).status,
-    "NO DATA",
-  );
+  assert.deepEqual(renderCodexFeedback(success({ week: { usedPercent: 42.4 } })), {
+    title: "GPT / OPENAI",
+    status: "",
+    sessionValue: "--",
+    sessionBar: { value: 0, bar_fill_c: "#6b5f8a" },
+    weekValue: "42%",
+    weekBar: { value: 42.4, bar_fill_c: "#7127ff" },
+  });
+  assert.deepEqual(renderCodexFeedback(success({ session: { usedPercent: 25 } })), {
+    title: "GPT / OPENAI",
+    status: "",
+    sessionValue: "25%",
+    sessionBar: { value: 25, bar_fill_c: "#7127ff" },
+    weekValue: "--",
+    weekBar: { value: 0, bar_fill_c: "#6b5f8a" },
+  });
 });
 
 test("action-feedback distinguishes stable stale and no-data states", () => {
@@ -122,19 +135,20 @@ test("renderCodexFeedback with showCountdown shows countdown when resetsAt prese
   const futureMs = Date.now() + 2 * 3_600_000 + 15 * 60_000;
   const resetsAt = new Date(futureMs).toISOString();
   const result = success({ week: { usedPercent: 50, resetsAt } });
-  assert.equal(renderCodexFeedback(result, false).value, "50%");
-  assert.match(renderCodexFeedback(result, true).value, /^\d+h \d+m$/);
+  assert.equal(renderCodexFeedback(result, false).weekValue, "50%");
+  assert.match(renderCodexFeedback(result, true).weekValue, /^\d+h \d+m$/);
+  assert.equal(renderCodexFeedback(result, true).sessionValue, "--", "only the week window is present");
 });
 
 test("renderCodexFeedback with showCountdown ignores resetsAt when absent", () => {
   const result = success({ week: { usedPercent: 42 } });
-  assert.equal(renderCodexFeedback(result, true).value, "42%");
+  assert.equal(renderCodexFeedback(result, true).weekValue, "42%");
 });
 
 test("renderCodexFeedback with showCountdown ignores expired resetsAt", () => {
   const past = new Date(Date.now() - 60_000).toISOString();
   const result = success({ week: { usedPercent: 30, resetsAt: past } });
-  assert.equal(renderCodexFeedback(result, true).value, "30%");
+  assert.equal(renderCodexFeedback(result, true).weekValue, "30%");
 });
 
 function success(
@@ -149,10 +163,10 @@ function success(
 }
 
 test("dial bars use level colors: brand <75, warn >=75, critical >=90, stale when stale or no data", () => {
-  const bar = (percent: number, stale = false) => renderCodexFeedback({ ...success({ week: { usedPercent: percent } }), stale } as never).indicator;
+  const bar = (percent: number, stale = false) => renderCodexFeedback({ ...success({ week: { usedPercent: percent } }), stale } as never).weekBar;
   assert.deepEqual(bar(74.9), { value: 74.9, bar_fill_c: "#7127ff" });
   assert.deepEqual(bar(75), { value: 75, bar_fill_c: "#ffb547" });
   assert.deepEqual(bar(90), { value: 90, bar_fill_c: "#ff5470" });
   assert.deepEqual(bar(95, true), { value: 95, bar_fill_c: "#6b5f8a" });
-  assert.deepEqual(renderCodexFeedback({ ok: false, error: new Error("x") } as never).indicator, { value: 0, bar_fill_c: "#6b5f8a" });
+  assert.deepEqual(renderCodexFeedback({ ok: false, error: new Error("x") } as never).weekBar, { value: 0, bar_fill_c: "#6b5f8a" });
 });

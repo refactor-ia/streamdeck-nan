@@ -14,8 +14,8 @@ import path, { join, isAbsolute, dirname, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { realpath, stat, access } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
@@ -9194,66 +9194,6 @@ typeof SuppressedError === "function" ? SuppressedError : function (error, suppr
     return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
 };
 
-function cancellableCommand(execution) {
-    return "result" in execution
-        ? execution
-        : { result: execution, cancel: () => undefined };
-}
-function hardDeadlineCommand(timeoutMs, start) {
-    let child;
-    let deadline;
-    let settled = false;
-    let resolveResult;
-    let rejectResult;
-    const result = new Promise((resolve, reject) => {
-        resolveResult = resolve;
-        rejectResult = reject;
-    });
-    const resolve = (value) => {
-        if (settled)
-            return;
-        settled = true;
-        if (deadline)
-            clearTimeout(deadline);
-        resolveResult(value);
-    };
-    const reject = (error) => {
-        if (settled)
-            return;
-        settled = true;
-        if (deadline)
-            clearTimeout(deadline);
-        rejectResult(error);
-    };
-    try {
-        child = start({ resolve, reject });
-    }
-    catch (error) {
-        reject(error);
-    }
-    if (!settled) {
-        deadline = setTimeout(() => {
-            try {
-                child?.kill("SIGKILL");
-            }
-            catch { /* El deadline sigue siendo terminal. */ }
-            reject(Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" }));
-        }, Math.max(1, timeoutMs));
-    }
-    return {
-        result,
-        cancel: () => {
-            if (settled)
-                return;
-            try {
-                child?.kill("SIGKILL");
-            }
-            catch { /* La cancelacion igualmente liquida la promesa. */ }
-            reject(new Error("Command cancelled"));
-        },
-    };
-}
-
 const usageWindowNames = ["session", "week"];
 const MAX_PROVIDER_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 const safeErrorMessages = {
@@ -9282,7 +9222,7 @@ function sanitizeUsageError(error, fallback = "unavailable") {
         : new UsageProviderError(fallback);
 }
 function normalizeUsageSnapshot(value) {
-    if (!isRecord$8(value) || !Number.isFinite(value.observedAt) || !isRecord$8(value.windows)) {
+    if (!isRecord$7(value) || !Number.isFinite(value.observedAt) || !isRecord$7(value.windows)) {
         return undefined;
     }
     const windows = {};
@@ -9305,336 +9245,193 @@ function normalizeUsageSnapshot(value) {
     return { windows, observedAt: value.observedAt };
 }
 function isUsageWindow(value) {
-    return (isRecord$8(value) &&
+    return (isRecord$7(value) &&
         Number.isFinite(value.usedPercent) &&
         (value.windowMinutes === undefined || Number.isFinite(value.windowMinutes)) &&
         (value.resetsAt === undefined || typeof value.resetsAt === "string"));
 }
-function isRecord$8(value) {
+function isRecord$7(value) {
     return typeof value === "object" && value !== null;
 }
 
-const CLAUDE_USAGE_ARGS = [
-    "-p",
-    "/usage",
-    "--tools",
-    "",
-    "--output-format",
-    "json",
-];
-const DEFAULT_MAX_STDOUT_BYTES = 64 * 1024;
-const FIXED_PATH$2 = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
-class ClaudeUsageProvider {
-    id = "claude";
-    runCommand;
-    resolveExecutable;
-    validateExecutable;
-    executableCandidates;
-    environment;
+/**
+ * Claude Pro/Max usage via the same OAuth endpoint Claude Code's `/usage` uses.
+ * The CLI's `-p /usage` output no longer carries limit percentages, so we read
+ * the session Claude Code already stores (macOS Keychain "Claude Code-credentials",
+ * fallback `~/.claude/.credentials.json`) and query
+ * `https://api.anthropic.com/api/oauth/usage` directly. Unofficial: may change.
+ *
+ * The stored token is never refreshed here — refreshing would rotate Claude Code's
+ * refresh token and could log the CLI out. An expired session fails as `authentication`
+ * and the user renews by opening Claude Code.
+ */
+const CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_TIMEOUT_MS = 5_000;
+// The keychain blob also carries every MCP plugin credential Claude Code stores,
+// so it can grow to tens of KB; the bound is only anti-hang.
+const KEYCHAIN_MAX_STDOUT_BYTES = 256 * 1024;
+const HTTP_TIMEOUT_MS = 10_000;
+class ClaudeOauthUsageProvider {
+    id = "claude-oauth";
     now;
-    timeoutMs;
-    maxStdoutBytes;
-    activeCommands = new Set();
-    generation = 0;
-    stopped = false;
-    stopping;
+    readCredentials;
+    fetcher;
     constructor(options = {}) {
-        this.runCommand = options.runCommand ?? runCommand;
-        this.resolveExecutable = options.resolveExecutable ?? resolveTrustedClaudeExecutable;
-        this.validateExecutable = options.validateExecutable ?? validateTrustedClaudeExecutable;
-        this.executableCandidates = options.executableCandidates ?? [
-            join(homedir(), ".local", "bin", "claude"),
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            "/usr/bin/claude",
-        ];
-        this.environment = options.environment ?? claudeEnvironment();
         this.now = options.now ?? Date.now;
-        this.timeoutMs = Math.max(1, options.timeoutMs ?? 10_000);
-        this.maxStdoutBytes = Math.max(1, options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES);
-    }
-    async getUsage() {
-        if (this.stopped)
-            return failure("stopped");
-        const generation = this.generation;
-        try {
-            for (const candidate of this.executableCandidates) {
-                const identity = await this.resolveExecutable(candidate);
-                if (!this.isCurrent(generation))
-                    return failure(this.stopped ? "stopped" : "unavailable");
-                if (!identity || !await this.validateExecutable(identity))
-                    continue;
-                if (!this.isCurrent(generation))
-                    return failure(this.stopped ? "stopped" : "unavailable");
-                try {
-                    const command = cancellableCommand(this.runCommand(identity.executable, CLAUDE_USAGE_ARGS, {
-                        timeoutMs: this.timeoutMs,
-                        maxStdoutBytes: this.maxStdoutBytes,
-                        env: this.environment,
-                    }));
-                    this.activeCommands.add(command);
-                    let response;
-                    try {
-                        response = await command.result;
-                    }
-                    finally {
-                        this.activeCommands.delete(command);
-                    }
-                    if (!this.isCurrent(generation))
-                        return failure(this.stopped ? "stopped" : "unavailable");
-                    if (response.exitCode !== 0)
-                        return failure("unavailable");
-                    if (Buffer.byteLength(response.stdout, "utf8") > this.maxStdoutBytes) {
-                        return failure("invalid-response");
-                    }
-                    const windows = parseClaudeUsage(response.stdout);
-                    if (!windows)
-                        return failure("invalid-response");
-                    return { ok: true, usage: { windows, observedAt: this.now() } };
-                }
-                catch (error) {
-                    if (!this.isCurrent(generation))
-                        return failure(this.stopped ? "stopped" : "unavailable");
-                    if (isTimeout(error))
-                        return failure("timeout");
-                    if (isMaxBufferError(error))
-                        return failure("invalid-response");
-                    return failure("unavailable");
-                }
-            }
-            return failure("executable-not-found");
-        }
-        catch (error) {
-            return { ok: false, error: sanitizeUsageError(error) };
-        }
+        this.readCredentials = options.readCredentials ?? readStoredClaudeCredentials;
+        this.fetcher = options.fetcher ?? fetch;
     }
     recoverAfterWake() {
-        if (this.stopped)
-            return;
-        this.generation += 1;
-        this.cancelActiveCommands();
+        // No cached transport state; the next read re-reads credentials and re-queries.
     }
-    stop() {
-        if (this.stopping)
-            return this.stopping;
-        this.stopped = true;
-        this.generation += 1;
-        const active = [...this.activeCommands];
-        for (const command of active)
-            command.cancel();
-        this.stopping = Promise.allSettled(active.map(({ result }) => result)).then(() => undefined);
-        return this.stopping;
-    }
-    stopImmediately() {
-        this.stopped = true;
-        this.generation += 1;
-        this.cancelActiveCommands();
-    }
-    isCurrent(generation) {
-        return !this.stopped && generation === this.generation;
-    }
-    cancelActiveCommands() {
-        for (const command of this.activeCommands)
-            command.cancel();
-    }
-}
-async function resolveTrustedClaudeExecutable(candidate, policy = {}) {
-    if (!isAbsolute(candidate))
-        return undefined;
-    try {
-        const resolved = await realpath(candidate);
-        if (!isAbsolute(resolved))
-            return undefined;
-        const metadata = await stat(resolved);
-        if (!isTrustedExecutableMetadata(metadata, policy) || !await hasTrustedParentChains(candidate, resolved, policy)) {
-            return undefined;
+    /** No background transport to stop: every read is self-contained. */
+    async stop() { }
+    stopImmediately() { }
+    async getUsage() {
+        const credential = await this.safeReadCredentials();
+        if (!credential.ok)
+            return failure("authentication");
+        if (credential.expiresAt !== undefined && credential.expiresAt <= this.now()) {
+            return failure("authentication");
         }
-        await access(resolved, constants$1.X_OK);
-        return { candidate, executable: resolved, dev: metadata.dev, ino: metadata.ino };
-    }
-    catch {
-        return undefined;
-    }
-}
-async function validateTrustedClaudeExecutable(identity, policy = {}) {
-    try {
-        const candidateTarget = await realpath(identity.candidate);
-        const executableTarget = await realpath(identity.executable);
-        if (candidateTarget !== identity.executable || executableTarget !== identity.executable) {
-            return false;
+        let value;
+        try {
+            value = await this.fetchUsage(credential.accessToken);
         }
-        const metadata = await stat(identity.executable);
-        if (metadata.dev !== identity.dev
-            || metadata.ino !== identity.ino
-            || !isTrustedExecutableMetadata(metadata, policy)
-            || !await hasTrustedParentChains(identity.candidate, identity.executable, policy))
-            return false;
-        await access(identity.executable, constants$1.X_OK);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-function isTrustedExecutableMetadata(metadata, policy) {
-    const uid = policy.uid ?? process.getuid?.();
-    return metadata.isFile()
-        && uid !== undefined
-        && (metadata.uid === uid || metadata.uid === 0)
-        && (metadata.mode & 0o022) === 0;
-}
-async function hasTrustedParentChains(candidate, executable, policy) {
-    const candidateParent = await realpath(dirname(candidate));
-    const executableParent = await realpath(dirname(executable));
-    return await hasTrustedDirectoryChain(candidateParent, policy)
-        && (candidateParent === executableParent || await hasTrustedDirectoryChain(executableParent, policy));
-}
-async function hasTrustedDirectoryChain(start, policy) {
-    let directory = start;
-    while (true) {
-        const metadata = await stat(directory);
-        const uid = policy.uid ?? process.getuid?.();
-        if (!metadata.isDirectory()
-            || uid === undefined
-            || (metadata.uid !== uid && metadata.uid !== 0)
-            || !isTrustedDirectoryMode(directory, metadata, uid, policy))
-            return false;
-        const parent = dirname(directory);
-        if (parent === directory)
-            return true;
-        directory = parent;
-    }
-}
-function isTrustedDirectoryMode(directory, metadata, uid, policy) {
-    if ((metadata.mode & 0o002) !== 0)
-        return false;
-    if ((metadata.mode & 0o020) === 0)
-        return true;
-    return isTrustedHomebrewDirectory(directory, metadata, { ...policy, uid });
-}
-function isTrustedHomebrewDirectory(directory, metadata, policy = {}) {
-    const uid = policy.uid ?? process.getuid?.();
-    const platform = policy.platform ?? process.platform;
-    const adminGid = policy.adminGid ?? 80;
-    const prefixes = policy.homebrewPrefixes ?? ["/opt/homebrew", "/usr/local"];
-    if (platform !== "darwin" || uid === undefined || metadata.uid !== uid || metadata.gid !== adminGid
-        || (metadata.mode & 0o020) === 0 || (metadata.mode & 0o002) !== 0)
-        return false;
-    // macOS admin (gid 80) members already hold local administrative authority; no other writable group is trusted.
-    return prefixes.some((prefix) => {
-        const fromPrefix = relative(prefix, directory);
-        return fromPrefix === "" || (!fromPrefix.startsWith("..") && !isAbsolute(fromPrefix));
-    });
-}
-function claudeEnvironment() {
-    const username = userInfo().username;
-    const env = {
-        HOME: homedir(),
-        PATH: FIXED_PATH$2,
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
-        USER: username,
-        LOGNAME: username,
-        SHELL: "/bin/zsh",
-        TERM: "dumb",
-    };
-    for (const name of ["TMPDIR", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME"]) {
-        const value = process.env[name];
-        if (value)
-            env[name] = value;
-    }
-    return env;
-}
-function runCommand(executable, args, options) {
-    return hardDeadlineCommand(options.timeoutMs, ({ resolve, reject }) => execFile(executable, [...args], {
-        encoding: "utf8",
-        env: { ...options.env },
-        maxBuffer: options.maxStdoutBytes,
-        timeout: options.timeoutMs,
-        killSignal: "SIGKILL",
-        shell: false,
-    }, (error, stdout) => {
-        if (error) {
-            if (typeof error.code === "number")
-                resolve({ exitCode: error.code, stdout });
-            else
-                reject(error);
-            return;
+        catch (error) {
+            return { ok: false, error: sanitizeUsageError(error, "unavailable") };
         }
-        resolve({ exitCode: 0, stdout });
-    }));
-}
-function parseClaudeUsage(stdout) {
-    let payload;
-    try {
-        payload = JSON.parse(stdout);
+        const windows = parseClaudeOauthUsage(value);
+        if (!windows)
+            return failure("invalid-response");
+        return { ok: true, usage: { windows, observedAt: this.now() } };
     }
-    catch {
-        return undefined;
-    }
-    if (!isRecord$7(payload) || typeof payload.result !== "string" || !hasZeroInference(payload)) {
-        return undefined;
-    }
-    const windows = {};
-    for (const line of payload.result.split(/\r?\n/)) {
-        const session = /^\s*Current session:\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
-        if (session)
-            windows.session = parseWindow$1(session[1]);
-        const week = /^\s*Current week \(all models\):\s*(\d+(?:\.\d+)?)% used(?:\s|$)/.exec(line);
-        if (week)
-            windows.week = parseWindow$1(week[1]);
-    }
-    return windows.session && windows.week ? windows : undefined;
-}
-function parseWindow$1(value) {
-    const usedPercent = Number(value);
-    return Number.isFinite(usedPercent) && usedPercent >= 0 && usedPercent <= 100
-        ? { usedPercent }
-        : undefined;
-}
-function hasZeroInference(payload) {
-    if (payload.num_turns !== 0
-        || payload.duration_api_ms !== 0
-        || payload.total_cost_usd !== 0
-        || !isRecord$7(payload.usage)
-        || !isRecord$7(payload.modelUsage)
-        || Object.keys(payload.modelUsage).length !== 0)
-        return false;
-    const totals = hasOnlyZeroUsageTotals(payload.usage);
-    return totals.valid && totals.found;
-}
-function hasOnlyZeroUsageTotals(value) {
-    let found = false;
-    for (const [key, item] of Object.entries(value)) {
-        if (key.endsWith("_tokens") || key.endsWith("_requests")) {
-            if (typeof item !== "number" || !Number.isFinite(item) || item !== 0) {
-                return { valid: false, found: true };
-            }
-            found = true;
+    async safeReadCredentials() {
+        try {
+            return await this.readCredentials();
         }
-        else if (isRecord$7(item)) {
-            const nested = hasOnlyZeroUsageTotals(item);
-            if (!nested.valid)
-                return nested;
-            found ||= nested.found;
+        catch {
+            return { ok: false };
         }
     }
-    return { valid: true, found };
+    async fetchUsage(accessToken) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+        let response;
+        try {
+            response = await this.fetcher(CLAUDE_OAUTH_USAGE_URL, {
+                method: "GET",
+                headers: {
+                    authorization: `Bearer ${accessToken}`,
+                    accept: "application/json",
+                    "anthropic-beta": "oauth-2025-04-20",
+                    "anthropic-version": "2023-06-01",
+                },
+                redirect: "manual",
+                cache: "no-store",
+                signal: controller.signal,
+            });
+        }
+        catch {
+            throw new UsageProviderError("unavailable");
+        }
+        finally {
+            clearTimeout(timer);
+        }
+        if (response.status === 401 || response.status === 403) {
+            void response.body?.cancel().catch(() => undefined);
+            throw new UsageProviderError("authentication");
+        }
+        if (!response.ok || response.redirected || response.status >= 300) {
+            void response.body?.cancel().catch(() => undefined);
+            throw new UsageProviderError("unavailable");
+        }
+        try {
+            return await response.json();
+        }
+        catch {
+            throw new UsageProviderError("invalid-response");
+        }
+        finally {
+            void response.body?.cancel().catch(() => undefined);
+        }
+    }
 }
 function failure(code) {
     return { ok: false, error: new UsageProviderError(code) };
 }
-function errorCode(error) {
-    return isRecord$7(error) ? error.code : undefined;
+/** `five_hour` → session, `seven_day` → week; anything else is ignored for now. */
+function parseClaudeOauthUsage(value) {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return undefined;
+    const windows = {};
+    const fiveHour = parseOauthWindow(value.five_hour, 300);
+    if (fiveHour)
+        windows.session = fiveHour;
+    const sevenDay = parseOauthWindow(value.seven_day, 10_080);
+    if (sevenDay)
+        windows.week = sevenDay;
+    return windows.session || windows.week ? windows : undefined;
 }
-function isTimeout(error) {
-    return errorCode(error) === "ETIMEDOUT" || (isRecord$7(error) && error.killed === true);
+function parseOauthWindow(value, windowMinutes) {
+    if (typeof value !== "object" || value === null)
+        return undefined;
+    const utilization = value.utilization;
+    if (typeof utilization !== "number" || !Number.isFinite(utilization) || utilization < 0)
+        return undefined;
+    const resetsAt = value.resets_at;
+    return {
+        usedPercent: Math.min(utilization, 100),
+        windowMinutes,
+        ...(typeof resetsAt === "string" && resetsAt !== "" ? { resetsAt } : {}),
+    };
 }
-function isMaxBufferError(error) {
-    return errorCode(error) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+/** Default credential reader: macOS Keychain first, then `~/.claude/.credentials.json`. */
+async function readStoredClaudeCredentials() {
+    const raw = await readKeychainSecret();
+    const parsed = parseStoredCredentials(raw ?? readCredentialsFile());
+    if (!parsed)
+        throw new UsageProviderError("authentication");
+    return parsed;
 }
-function isRecord$7(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+function readKeychainSecret() {
+    return new Promise((resolve) => {
+        execFile("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"], { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: KEYCHAIN_MAX_STDOUT_BYTES }, (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined));
+    });
+}
+function readCredentialsFile() {
+    try {
+        return readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8");
+    }
+    catch {
+        return undefined;
+    }
+}
+function parseStoredCredentials(raw) {
+    if (!raw)
+        return undefined;
+    let value;
+    try {
+        value = JSON.parse(raw);
+    }
+    catch {
+        return undefined;
+    }
+    if (typeof value !== "object" || value === null)
+        return undefined;
+    const oauth = value.claudeAiOauth;
+    if (typeof oauth !== "object" || oauth === null)
+        return undefined;
+    const accessToken = oauth.accessToken;
+    if (typeof accessToken !== "string" || accessToken === "")
+        return undefined;
+    const expiresAt = oauth.expiresAt;
+    return {
+        ok: true,
+        accessToken,
+        ...(typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { expiresAt } : {}),
+    };
 }
 
 const CLAUDE_COORDINATOR_OPTIONS = {
@@ -10151,8 +9948,44 @@ function formatPace(pace) {
     switch (pace.kind) {
         case "cap-date": return `CAP ~${formatResetDate(pace.at)}`;
         case "capped": return "CAP REACHED";
-        case "period-end-percent": return `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
+        // A rounded projection of 0% would read as "zero by reset"; any nonzero rate shows <1%.
+        case "period-end-percent": return pace.percent === 0 ? "<1% AT RESET" : `~${pace.percent > 999 ? ">999" : pace.percent}% AT RESET`;
     }
+}
+/**
+ * 30-day usage history chart: 184x64 SVG with one 4px bar per day, scaled to the
+ * busiest day, grounded by a baseline. Zero days produce no bar.
+ */
+const CHART_BAR_WIDTH = 4;
+const CHART_PITCH = 6;
+const CHART_X0 = 2;
+const CHART_BASE_Y = 62;
+const CHART_MAX_HEIGHT = 60;
+const CHART_BAR_COLOR = "#7127ff";
+function renderNanUsageHistoryChart(totals) {
+    const max = Math.max(...totals.map((entry) => entry.totalTokens), 0);
+    const bars = totals
+        .map((entry, index) => {
+        if (entry.totalTokens <= 0 || max <= 0)
+            return "";
+        const height = Math.max(1, Math.round(entry.totalTokens / max * CHART_MAX_HEIGHT));
+        const x = CHART_X0 + index * CHART_PITCH;
+        return `<rect x="${x}" y="${CHART_BASE_Y - height}" width="${CHART_BAR_WIDTH}" height="${height}" fill="${CHART_BAR_COLOR}"/>`;
+    })
+        .join("");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="184" height="64" viewBox="0 0 184 64">`
+        + `<line x1="0" y1="${CHART_BASE_Y + 0.5}" x2="184" y2="${CHART_BASE_Y + 0.5}" stroke="#9a8fb8" stroke-width="1"/>`
+        + bars
+        + `</svg>`;
+}
+function renderNanUsageHistoryFeedback(totals, model) {
+    return Object.freeze({
+        title: "NaN",
+        demo: "HISTORY",
+        model: model ?? "--",
+        chart: `data:image/svg+xml;base64,${Buffer.from(renderNanUsageHistoryChart(totals), "utf8").toString("base64")}`,
+        status: "",
+    });
 }
 function dashboardStatus(state) {
     switch (state.error) {
@@ -10210,24 +10043,29 @@ function renderClaudeFeedback(result, _showCountdown = false) {
     };
 }
 function renderCodexFeedback(result, showCountdown = false) {
+    const session = result.ok ? result.usage.windows.session : undefined;
     const week = result.ok ? result.usage.windows.week : undefined;
-    if (!result.ok || !week) {
+    if (!result.ok || (!session && !week)) {
         return {
             title: "GPT / OPENAI",
-            period: "WEEKLY",
-            value: "--",
-            indicator: bar(undefined),
             status: "NO DATA",
+            sessionValue: "--",
+            sessionBar: bar(undefined),
+            weekValue: "--",
+            weekBar: bar(undefined),
         };
     }
-    const weekly = Math.min(100, Math.max(0, week.usedPercent));
-    const countdown = showCountdown && week.resetsAt ? formatCountdown(week.resetsAt) : null;
+    // Available partial windows render (parity with Claude); only both missing is NO DATA.
+    const countdown = showCountdown && week?.resetsAt ? formatCountdown(week.resetsAt) : null;
+    const sessionDisplay = usageDisplay(session?.usedPercent, result.stale);
+    const weekDisplay = usageDisplay(week?.usedPercent, result.stale);
     return {
         title: "GPT / OPENAI",
-        period: "WEEKLY",
-        value: countdown ?? `${Math.round(weekly)}%`,
-        indicator: bar(week.usedPercent, result.stale),
         status: result.stale ? "STALE" : "",
+        sessionValue: sessionDisplay.value,
+        sessionBar: sessionDisplay.bar,
+        weekValue: countdown ?? weekDisplay.value,
+        weekBar: weekDisplay.bar,
     };
 }
 function renderGrokFeedback(result, showCountdown = false) {
@@ -10291,7 +10129,7 @@ let ClaudeUsage = (() => {
         }
         coordinator;
         lastResult = null;
-        constructor(coordinator = new UsageProviderCoordinator(new ClaudeUsageProvider(), CLAUDE_COORDINATOR_OPTIONS)) {
+        constructor(coordinator = new UsageProviderCoordinator(new ClaudeOauthUsageProvider(), CLAUDE_COORDINATOR_OPTIONS)) {
             super();
             this.coordinator = coordinator;
         }
@@ -10330,6 +10168,95 @@ let ClaudeUsage = (() => {
     });
     return _classThis;
 })();
+
+async function resolveTrustedClaudeExecutable(candidate, policy = {}) {
+    if (!isAbsolute(candidate))
+        return undefined;
+    try {
+        const resolved = await realpath(candidate);
+        if (!isAbsolute(resolved))
+            return undefined;
+        const metadata = await stat(resolved);
+        if (!isTrustedExecutableMetadata(metadata, policy) || !await hasTrustedParentChains(candidate, resolved, policy)) {
+            return undefined;
+        }
+        await access(resolved, constants$1.X_OK);
+        return { candidate, executable: resolved, dev: metadata.dev, ino: metadata.ino };
+    }
+    catch {
+        return undefined;
+    }
+}
+async function validateTrustedClaudeExecutable(identity, policy = {}) {
+    try {
+        const candidateTarget = await realpath(identity.candidate);
+        const executableTarget = await realpath(identity.executable);
+        if (candidateTarget !== identity.executable || executableTarget !== identity.executable) {
+            return false;
+        }
+        const metadata = await stat(identity.executable);
+        if (metadata.dev !== identity.dev
+            || metadata.ino !== identity.ino
+            || !isTrustedExecutableMetadata(metadata, policy)
+            || !await hasTrustedParentChains(identity.candidate, identity.executable, policy))
+            return false;
+        await access(identity.executable, constants$1.X_OK);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function isTrustedExecutableMetadata(metadata, policy) {
+    const uid = policy.uid ?? process.getuid?.();
+    return metadata.isFile()
+        && uid !== undefined
+        && (metadata.uid === uid || metadata.uid === 0)
+        && (metadata.mode & 0o022) === 0;
+}
+async function hasTrustedParentChains(candidate, executable, policy) {
+    const candidateParent = await realpath(dirname(candidate));
+    const executableParent = await realpath(dirname(executable));
+    return await hasTrustedDirectoryChain(candidateParent, policy)
+        && (candidateParent === executableParent || await hasTrustedDirectoryChain(executableParent, policy));
+}
+async function hasTrustedDirectoryChain(start, policy) {
+    let directory = start;
+    while (true) {
+        const metadata = await stat(directory);
+        const uid = policy.uid ?? process.getuid?.();
+        if (!metadata.isDirectory()
+            || uid === undefined
+            || (metadata.uid !== uid && metadata.uid !== 0)
+            || !isTrustedDirectoryMode(directory, metadata, uid, policy))
+            return false;
+        const parent = dirname(directory);
+        if (parent === directory)
+            return true;
+        directory = parent;
+    }
+}
+function isTrustedDirectoryMode(directory, metadata, uid, policy) {
+    if ((metadata.mode & 0o002) !== 0)
+        return false;
+    if ((metadata.mode & 0o020) === 0)
+        return true;
+    return isTrustedHomebrewDirectory(directory, metadata, { ...policy, uid });
+}
+function isTrustedHomebrewDirectory(directory, metadata, policy = {}) {
+    const uid = policy.uid ?? process.getuid?.();
+    const platform = policy.platform ?? process.platform;
+    const adminGid = policy.adminGid ?? 80;
+    const prefixes = policy.homebrewPrefixes ?? ["/opt/homebrew", "/usr/local"];
+    if (platform !== "darwin" || uid === undefined || metadata.uid !== uid || metadata.gid !== adminGid
+        || (metadata.mode & 0o020) === 0 || (metadata.mode & 0o002) !== 0)
+        return false;
+    // macOS admin (gid 80) members already hold local administrative authority; no other writable group is trusted.
+    return prefixes.some((prefix) => {
+        const fromPrefix = relative(prefix, directory);
+        return fromPrefix === "" || (!fromPrefix.startsWith("..") && !isAbsolute(fromPrefix));
+    });
+}
 
 /**
  * Allowed environment variables — same policy as the Grok transport.
@@ -11803,6 +11730,12 @@ class NanApiUsageError extends Error {
             this.retryAfterMs = retryAfterMs;
     }
 }
+const DAILY_WINDOW_DAYS = 30;
+const DAILY_PAGE_ROWS = "200";
+const MAX_DAILY_PAGES = 50;
+const DAY_MS$1 = 24 * 60 * 60 * 1000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const utcDay$1 = (value) => value.toISOString().slice(0, 10);
 class NanApiUsageClient {
     fetcher;
     clock;
@@ -11814,9 +11747,32 @@ class NanApiUsageClient {
     }
     /** One request per call: `totals.by_model` covers the whole window and `all_time` is always present. */
     async getUsage(apiKey) {
-        const today = this.now().toISOString().slice(0, 10);
+        const today = utcDay$1(this.now());
         const query = new URLSearchParams({ start_date: `${today.slice(0, 7)}-01`, end_date: today, limit: "1" });
-        const value = await getNanJson({
+        const value = await this.fetchPage(apiKey, query);
+        return parseNanApiUsage(value);
+    }
+    /** Per-day per-model rows for the last `days` UTC days (default 30), following cursor pagination. */
+    async getDailyUsage(apiKey, days = DAILY_WINDOW_DAYS) {
+        const today = utcDay$1(this.now());
+        const start = utcDay$1(new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * DAY_MS$1));
+        const rows = [];
+        let cursor;
+        for (let page = 0; page < MAX_DAILY_PAGES; page += 1) {
+            const query = new URLSearchParams({ start_date: start, end_date: today, limit: DAILY_PAGE_ROWS });
+            if (cursor !== undefined)
+                query.set("cursor", cursor);
+            const parsed = parseNanApiDailyPage(await this.fetchPage(apiKey, query));
+            rows.push(...parsed.rows);
+            if (!parsed.hasMore)
+                return Object.freeze(rows);
+            cursor = parsed.nextCursor;
+        }
+        // A server that never stops reporting more pages is misbehaving; refuse rather than loop.
+        throw new NanApiUsageError("transport");
+    }
+    fetchPage(apiKey, query) {
+        return getNanJson({
             url: `${NAN_API_USAGE_URL}?${query}`,
             apiKey,
             fetcher: this.fetcher,
@@ -11825,8 +11781,30 @@ class NanApiUsageClient {
             createError: (kind, retryAfterMs) => new NanApiUsageError(kind, retryAfterMs),
             isExpectedError: (error) => error instanceof NanApiUsageError,
         });
-        return parseNanApiUsage(value);
     }
+}
+function parseNanApiDailyPage(value) {
+    if (!isRecord$1(value) || value.object !== "usage.report" || !Array.isArray(value.data)
+        || typeof value.has_more !== "boolean") {
+        throw new NanApiUsageError("schema");
+    }
+    if (value.has_more && (typeof value.next_cursor !== "string" || value.next_cursor === "")) {
+        throw new NanApiUsageError("schema");
+    }
+    const rows = [];
+    for (const entry of value.data) {
+        if (!isRecord$1(entry) || typeof entry.date !== "string" || !DATE_RE.test(entry.date)
+            || !isModelName$2(entry.model) || !isCounter$1(entry.prompt_tokens)
+            || !isCounter$1(entry.completion_tokens) || !isCounter$1(entry.total_tokens)) {
+            throw new NanApiUsageError("schema");
+        }
+        rows.push(Object.freeze({ date: entry.date, model: entry.model, totalTokens: entry.total_tokens }));
+    }
+    return Object.freeze({
+        rows: Object.freeze(rows),
+        hasMore: value.has_more,
+        ...(value.has_more ? { nextCursor: value.next_cursor } : {}),
+    });
 }
 function parseNanApiUsage(value) {
     if (!isRecord$1(value) || value.object !== "usage.report" || !isRecord$1(value.totals) || !isRecord$1(value.all_time)) {
@@ -12097,6 +12075,17 @@ class NanDashboardController {
         this.now = options.now ?? Date.now;
     }
     isDashboardWatched() { return this.watchers.size > 0; }
+    /**
+     * On-demand 30-day per-model usage rows for the dial history view. Unlike the shared
+     * snapshot this is a direct read: it never feeds the dashboard cache or its backoff.
+     * Throws a generic error when the Keychain is unavailable; undefined means no usable key.
+     */
+    async fetchDailyUsage(days = 30) {
+        const apiKey = await this.keys.read();
+        if (!apiKey || !this.usage.getDailyUsage)
+            return undefined;
+        return this.usage.getDailyUsage(apiKey, days);
+    }
     /** Leases the one shared poll for visible aggregate keypad actions. */
     watchDashboard() {
         const watcher = Symbol("dashboard-watcher");
@@ -12289,6 +12278,31 @@ const defaultWatchScheduler = {
     clearInterval: (timer) => clearInterval(timer),
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const utcDay = (value) => value.toISOString().slice(0, 10);
+/**
+ * Per-day total tokens for one model over the last `days` UTC days ending today,
+ * oldest first. Days without rows are zero-filled; rows for other models or
+ * outside the window are ignored. Same-day rows are summed.
+ */
+function dailyTotalsForModel(rows, model, days, now = () => new Date()) {
+    const today = utcDay(now());
+    const startIndex = Date.parse(`${today}T00:00:00Z`) - (days - 1) * DAY_MS;
+    const totals = new Map();
+    for (const row of rows) {
+        if (row.model !== model)
+            continue;
+        const day = Date.parse(`${row.date}T00:00:00Z`);
+        if (!Number.isFinite(day) || day < startIndex || day > Date.parse(`${today}T00:00:00Z`))
+            continue;
+        totals.set(row.date, (totals.get(row.date) ?? 0) + row.totalTokens);
+    }
+    return Array.from({ length: days }, (_, index) => {
+        const date = utcDay(new Date(startIndex + index * DAY_MS));
+        return Object.freeze({ date, totalTokens: totals.get(date) ?? 0 });
+    });
+}
+
 const SAVE_API_KEY_KIND = "nan.saveApiKey.v1";
 const CLEAR_API_KEY_KIND = "nan.clearApiKey.v1";
 const API_KEY_RESULT_KIND = "nan.apiKey.result.v1";
@@ -12333,6 +12347,8 @@ async function handleNanApiKeyMessage(payload, controller) {
     }
 }
 
+const LAYOUT_PATHS = { pace: "layouts/nan.json", history: "layouts/nan-history.json" };
+const DIAL_LONG_PRESS_MS = 700;
 let NanDemoUsage = (() => {
     let _classDecorators = [action({ UUID: "com.refactor-ia.nan.nan-demo" })];
     let _classDescriptor;
@@ -12352,9 +12368,12 @@ let NanDemoUsage = (() => {
         desiredSettings = new Map();
         settingsWrites = new NanSettingsWriteQueue();
         legacySourceMigrated = new Set();
+        layouts = new Map();
+        historyRows = new Map();
+        historyLoading = new Set();
         dashboard;
-        constructor(dashboard = new NanDashboardController()) {
-            super();
+        constructor(dashboard = new NanDashboardController(), scheduler) {
+            super(scheduler);
             this.dashboard = dashboard;
         }
         async onWillAppear(ev) {
@@ -12365,11 +12384,52 @@ let NanDemoUsage = (() => {
             await this.activateOnAppearance(action, ev.payload.settings, async () => {
                 await this.migrateLegacySource(action, ev.payload.settings, this.lifecycleGuard(action));
             });
+            if (ev.payload.settings.view === "history")
+                void this.loadHistory(action.id, action, ev.payload.settings);
         }
         async onTouchTap(ev) {
             if (!ev.action.isDial())
                 return;
-            await this.refresh(ev.action);
+            // A hold stays an explicit fresh read; a short tap toggles pace/history using the cached snapshot.
+            if (ev.payload.hold) {
+                await this.refresh(ev.action);
+                return;
+            }
+            await this.toggleView(ev.action, ev.payload.settings);
+        }
+        pressStartedAt = new Map();
+        async onDialDown(ev) {
+            if (!ev.action.isDial())
+                return;
+            this.pressStartedAt.set(ev.action.id, Date.now());
+        }
+        async onDialUp(ev) {
+            if (!ev.action.isDial())
+                return;
+            const startedAt = this.pressStartedAt.get(ev.action.id);
+            this.pressStartedAt.delete(ev.action.id);
+            const heldMs = startedAt === undefined ? -1 : Date.now() - startedAt;
+            // A long press is the explicit fresh read; a quick press toggles pace/history.
+            if (heldMs >= DIAL_LONG_PRESS_MS) {
+                await this.refresh(ev.action);
+                return;
+            }
+            await this.toggleView(ev.action, ev.payload.settings);
+        }
+        async toggleView(action, eventSettings) {
+            const isCurrent = this.lifecycleGuard(action);
+            const isSameAppearance = this.appearanceGuard(action);
+            if (!isCurrent())
+                return;
+            const currentSettings = this.desiredSettings.get(action.id) ?? eventSettings;
+            const settings = { ...currentSettings, view: currentSettings.view === "history" ? "pace" : "history" };
+            const selectionGeneration = this.recordSelection(action.id, settings);
+            const persisted = await persistLatestNanSettings(selectionGeneration, settings, () => this.latestSelection(action.id, settings), (latest) => this.writeSettings(action, latest), isCurrent, isSameAppearance);
+            if (isCurrent() && this.selectionGeneration(action.id) === selectionGeneration) {
+                await this.render(action, this.dashboard.getCachedUsage(persisted), persisted);
+            }
+            if (persisted.view === "history")
+                void this.loadHistory(action.id, action, persisted);
         }
         async onDidReceiveSettings(ev) {
             if (!ev.action.isDial())
@@ -12383,6 +12443,8 @@ let NanDemoUsage = (() => {
             if (!isCurrent())
                 return;
             await this.render(ev.action, this.dashboard.getCachedUsage(settings), settings);
+            if (settings.view === "history" && !this.historyRows.get(ev.action.id)?.length)
+                void this.loadHistory(ev.action.id, ev.action, settings);
         }
         async onDialRotate(ev) {
             if (!ev.action.isDial())
@@ -12423,6 +12485,9 @@ let NanDemoUsage = (() => {
             this.selectionGenerations.delete(ev.action.id);
             this.desiredSettings.delete(ev.action.id);
             this.legacySourceMigrated.delete(ev.action.id);
+            this.layouts.delete(ev.action.id);
+            this.historyRows.delete(ev.action.id);
+            this.historyLoading.delete(ev.action.id);
         }
         async updateDisplay(action, isCurrent, force) {
             // Aggregate keypad keys own the shared poll. A dial timer redraws its cached snapshot
@@ -12467,7 +12532,54 @@ let NanDemoUsage = (() => {
             return { generation: latest.generation, settings: migrated };
         }
         async render(action, state, settings) {
+            const rows = settings.view === "history" ? this.historyRows.get(action.id) : undefined;
+            if (rows && rows.length > 0) {
+                const models = listNanModels(state);
+                // When the quota catalog is momentarily unavailable, a persisted selection that the
+                // history itself observes is still a valid "selected model".
+                const selected = state.error ? undefined
+                    : resolveNanLiveModel(models, models, settings.model)
+                        ?? (settings.model && rows.some((row) => row.model === settings.model) ? settings.model : undefined);
+                const totals = dailyTotalsForModel(rows, selected ?? "", 30);
+                await this.useLayout(action, "history");
+                await action.setFeedback(renderNanUsageHistoryFeedback(totals, selected));
+                return;
+            }
+            // No usable history (not loaded yet, empty, or failed read) keeps the existing pace view.
+            await this.useLayout(action, "pace");
             await action.setFeedback(renderNanDashboardFeedback(state, settings));
+        }
+        async useLayout(action, layout) {
+            if (this.layouts.get(action.id) === layout)
+                return;
+            this.layouts.set(action.id, layout);
+            try {
+                await action.setFeedbackLayout(LAYOUT_PATHS[layout]);
+            }
+            catch (error) {
+                this.layouts.delete(action.id);
+            }
+        }
+        /**
+         * Direct on-demand read for the history view; a failure or missing key records an
+         * empty series so the dial falls back to the pace view instead of showing a stale chart.
+         */
+        async loadHistory(contextId, action, settings) {
+            if (this.historyLoading.has(contextId))
+                return;
+            this.historyLoading.add(contextId);
+            try {
+                const rows = await this.dashboard.fetchDailyUsage(30);
+                this.historyRows.set(contextId, rows);
+            }
+            catch (error) {
+                this.historyRows.set(contextId, []);
+            }
+            finally {
+                this.historyLoading.delete(contextId);
+            }
+            if (this.hasActiveLifecycle(action))
+                await this.render(action, this.dashboard.getCachedUsage(settings), settings);
         }
         selectionGeneration(contextId) { return this.selectionGenerations.get(contextId) ?? 0; }
         recordSelection(contextId, settings) {
@@ -13078,7 +13190,9 @@ class TransitioningProviderStatusReporter {
 }
 
 const statusReporter = new TransitioningProviderStatusReporter((message) => streamDeck.logger.warn(message));
-const claudeProvider = new ClaudeUsageProvider();
+// The CLI -p /usage output no longer carries limit percentages; the OAuth provider
+// reuses Claude Code's stored session (quorb-style). Old CLI provider kept for reference.
+const claudeProvider = new ClaudeOauthUsageProvider();
 const claudeCoordinator = new UsageProviderCoordinator(claudeProvider, { ...CLAUDE_COORDINATOR_OPTIONS, statusReporter });
 const codexProvider = new CodexUsageProvider();
 const codexCoordinator = new UsageProviderCoordinator(codexProvider, { statusReporter });

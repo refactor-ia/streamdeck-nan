@@ -121,3 +121,217 @@ function replaceUi(t: test.TestContext, ui: object): void {
   Object.defineProperty(streamDeck, "ui", { configurable: true, value: ui });
   t.after(() => Object.defineProperty(streamDeck, "ui", descriptor!));
 }
+
+test("a short tap toggles the dial view and persists it; a hold keeps the fresh read", async (t) => {
+  let usageReads = 0;
+  const dashboard = new class extends ImportDashboard {
+    override async getUsage(): Promise<{ source: "dashboard"; stale: false }> { usageReads += 1; return { source: "dashboard", stale: false }; }
+  }();
+  const written: unknown[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false };
+  const dial = {
+    id: "toggle",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setFeedback: async () => undefined,
+    setSettings: async (settings: Record<string, unknown>) => { written.push(settings); current = { ...settings }; },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  const baselineReads = usageReads;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  assert.equal(current.view, "history", "first short tap switches to history");
+  await tap(false);
+  assert.equal(current.view, "pace", "second short tap switches back to pace");
+  assert.equal(usageReads, baselineReads, "toggling uses the cached snapshot, not a fresh read");
+  assert.equal(written.length, 2, "each toggle is persisted");
+
+  current.view = "history";
+  await subject.onDidReceiveSettings({ action: dial, payload: { settings: { ...current } } } as never);
+  await tap(false);
+  assert.equal(current.view, "pace", "toggling works from a restored history view");
+
+  const views = [current.view];
+  await tap(true);
+  assert.deepEqual(views, ["pace"], "a hold does not change the view");
+  assert.equal(usageReads, baselineReads + 1, "a hold keeps the explicit fresh read");
+});
+
+test("toggling into history renders the 30-day chart and switching back restores the pace layout", async (t) => {
+  const rows = [
+    { date: "2026-10-13", model: "glm5.3", totalTokens: 90751189 },
+    { date: "2026-10-14", model: "glm5.3", totalTokens: 9 },
+  ];
+  const layouts: string[] = [];
+  const feedbacks: unknown[] = [];
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> { return rows; }
+  }();
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "history",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  feedbacks.length = 0;
+  layouts.length = 0;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(layouts, ["layouts/nan-history.json"]);
+  const history = feedbacks.at(-1) as { demo?: string; chart?: string; model?: string };
+  assert.equal(history.demo, "HISTORY");
+  assert.equal(history.model, "glm5.3");
+  assert.match(history.chart!, /^data:image\/svg\+xml;base64,/);
+
+  await tap(false);
+  assert.equal(layouts.at(-1), "layouts/nan.json", "returning to pace restores the original layout");
+  const pace = feedbacks.at(-1) as { demo?: string; unit?: string };
+  assert.equal(pace.demo, "DASHBOARD");
+});
+
+test("a failed or empty history read falls back to the pace view, with no chart shown", async () => {
+  let failing = true;
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> {
+      if (failing) throw new Error("sentinel-usage-failure");
+      return [];
+    }
+  }();
+  const layouts: string[] = [];
+  const feedbacks: unknown[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "fallback",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  feedbacks.length = 0;
+  layouts.length = 0;
+
+  const tap = (hold: boolean) => subject.onTouchTap({ action: dial, payload: { settings: { ...current }, hold, tapPos: [0, 0] } } as never);
+  await tap(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(current.view, "history", "the view still toggles even when the read fails");
+  assert.equal(layouts.includes("layouts/nan-history.json"), false, "the layout never switches to history");
+  assert.equal((feedbacks.at(-1) as { demo?: string }).demo, "DASHBOARD");
+  assert.equal(feedbacks.some((payload) => JSON.stringify(payload).includes("sentinel-usage-failure")), false);
+  assert.equal(feedbacks.some((payload) => (payload as { demo?: string }).demo === "HISTORY"), false);
+
+  failing = false;
+  await tap(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(feedbacks.some((payload) => (payload as { demo?: string }).demo === "HISTORY"), false, "an empty history is not shown as a chart either");
+});
+
+test("pressing the dial toggles the view; a long press refreshes instead", async (t) => {
+  const dashboard = new ImportDashboard();
+  const layouts: string[] = [];
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3" };
+  const dial = {
+    id: "press",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async (settings: Record<string, unknown>) => { current = { ...settings }; },
+    setFeedback: async () => undefined,
+    setFeedbackLayout: async (layout: string) => { layouts.push(layout); },
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+
+  const realNow = Date.now;
+  const press = (releasedAt: number) => {
+    Date.now = () => 1_000;
+    void subject.onDialDown({ action: dial, payload: { settings: { ...current } } } as never);
+    Date.now = () => releasedAt;
+    return subject.onDialUp({ action: dial, payload: { settings: { ...current } } } as never).finally(() => { Date.now = realNow; });
+  };
+
+  await press(1_100);
+  assert.equal(current.view, "history", "a quick press toggles to history");
+  await press(1_100);
+  assert.equal(current.view, "pace", "a quick press toggles back");
+  await press(1_000 + 800);
+  assert.equal(current.view, "pace", "a long press does not toggle");
+});
+
+test("a dial restored in the history view loads its history on appearance", async (t) => {
+  const rows = [{ date: "2026-10-14", model: "glm5.3", totalTokens: 9 }];
+  const feedbacks: unknown[] = [];
+  const dashboard = new class extends ImportDashboard {
+    override async fetchDailyUsage(): Promise<readonly { date: string; model: string; totalTokens: number }[]> { return rows; }
+  }();
+  let current: Record<string, unknown> = { autoRefresh: false, model: "glm5.3", view: "history" };
+  const dial = {
+    id: "restored",
+    isDial: () => true,
+    getSettings: async () => ({ ...current }),
+    setSettings: async () => undefined,
+    setFeedback: async (payload: unknown) => { feedbacks.push(payload); },
+    setFeedbackLayout: async () => undefined,
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard);
+  await subject.onWillAppear({ action: dial, payload: { settings: { ...current } } } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal((feedbacks.at(-1) as { demo?: string }).demo, "HISTORY", "the restored dial renders the chart without needing a toggle");
+});
+
+test("the dial arms its periodic refresh timer on appearance, re-renders cache-only on tick, and clears it on disappear", async (t) => {
+  const intervals: { callback: () => void; ms: number }[] = [];
+  const cleared: ReturnType<typeof setInterval>[] = [];
+  const scheduler = {
+    setInterval: (callback: () => void, ms: number) => { const handle = { fake: true } as unknown as ReturnType<typeof setInterval>; intervals.push({ callback, ms }); return handle; },
+    clearInterval: (handle: ReturnType<typeof setInterval>) => cleared.push(handle),
+  };
+  let getUsageCalls = 0;
+  let lastOptions: { cacheWhileWatched?: boolean } | undefined;
+  const dashboard = new class extends ImportDashboard {
+    override async getUsage(_settings?: unknown, options?: { cacheWhileWatched?: boolean }): Promise<{ source: "dashboard"; stale: false }> {
+      getUsageCalls += 1;
+      lastOptions = options;
+      return { source: "dashboard", stale: false };
+    }
+  }();
+  const dial = {
+    id: "timer",
+    isDial: () => true,
+    getSettings: async () => ({ autoRefresh: true }),
+    setFeedback: async () => undefined,
+    setSettings: async () => undefined,
+  } as unknown as DialAction<Record<string, never>>;
+  const { NanDemoUsage } = await loadNanDemoUsage();
+  const subject = new NanDemoUsage(dashboard, scheduler);
+  await subject.onWillAppear({ action: dial, payload: { settings: { autoRefresh: true } } } as never);
+
+  assert.equal(intervals.length, 1, "appearance arms exactly one timer");
+  assert.equal(intervals[0]!.ms, 30_000, "the default tick is 30s");
+  const baseline = getUsageCalls;
+  intervals[0]!.callback();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(getUsageCalls, baseline + 1, "a tick re-renders the dial");
+  assert.equal(lastOptions?.cacheWhileWatched, true, "a tick is display-only while the shared lease is active");
+
+  subject.onWillDisappear({ action: dial } as never);
+  assert.equal(cleared.length >= 1, true, "disappearance clears the timer");
+});

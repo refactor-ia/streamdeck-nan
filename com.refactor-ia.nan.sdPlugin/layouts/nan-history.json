@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+  "id": "NanUsageHistory",
+  "items": [
+    {
+      "key": "title",
+      "type": "text",
+      "rect": [8, 4, 60, 24],
+      "alignment": "left",
+      "font": { "size": 18, "weight": 800 },
+      "value": "NaN",
+      "color": "#ffffff"
+    },
+    {
+      "key": "demo",
+      "type": "text",
+      "rect": [72, 8, 120, 16],
+      "alignment": "right",
+      "font": { "size": 9, "weight": 800 },
+      "value": "HISTORY",
+      "color": "#9a8fb8"
+    },
+    {
+      "key": "model",
+      "type": "text",
+      "rect": [8, 30, 184, 12],
+      "alignment": "left",
+      "font": { "size": 10, "weight": 800 },
+      "value": "Dashboard",
+      "color": "#9a8fb8"
+    },
+    {
+      "key": "chart",
+      "type": "pixmap",
+      "rect": [8, 42, 184, 58],
+      "value": ""
+    }
+  ]
+}

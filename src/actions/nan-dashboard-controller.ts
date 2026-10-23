@@ -1,5 +1,5 @@
 import { NanApiKeyStore } from "../providers/nan/nan-api-key-store.js";
-import { NanApiUsageClient, NanApiUsageError, type NanApiUsageSnapshot } from "../providers/nan/nan-api-usage-provider.js";
+import { NanApiUsageClient, NanApiUsageError, type NanApiDailyUsageRow, type NanApiUsageSnapshot } from "../providers/nan/nan-api-usage-provider.js";
 import { NanModelsClient, NanModelsError } from "../providers/nan/nan-api-models-provider.js";
 import { NanQuotaClient, type NanQuota } from "../providers/nan/nan-api-quota-provider.js";
 
@@ -25,7 +25,10 @@ interface ApiKeys {
   write(key: string): Promise<void>;
   clear(): Promise<void>;
 }
-interface UsageSource { getUsage(apiKey: string): Promise<NanApiUsageSnapshot>; }
+interface UsageSource {
+  getUsage(apiKey: string): Promise<NanApiUsageSnapshot>;
+  getDailyUsage?(apiKey: string, days?: number): Promise<readonly NanApiDailyUsageRow[]>;
+}
 interface ModelsSource { getModels(apiKey: string): Promise<readonly string[]>; }
 interface QuotaSource { getQuota(apiKey: string): Promise<NanQuota>; }
 
@@ -75,6 +78,17 @@ export class NanDashboardController {
   }
 
   isDashboardWatched(): boolean { return this.watchers.size > 0; }
+
+  /**
+   * On-demand 30-day per-model usage rows for the dial history view. Unlike the shared
+   * snapshot this is a direct read: it never feeds the dashboard cache or its backoff.
+   * Throws a generic error when the Keychain is unavailable; undefined means no usable key.
+   */
+  async fetchDailyUsage(days = 30): Promise<readonly NanApiDailyUsageRow[] | undefined> {
+    const apiKey = await this.keys.read();
+    if (!apiKey || !this.usage.getDailyUsage) return undefined;
+    return this.usage.getDailyUsage(apiKey, days);
+  }
 
   /** Leases the one shared poll for visible aggregate keypad actions. */
   watchDashboard(): () => void {
