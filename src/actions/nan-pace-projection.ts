@@ -5,7 +5,8 @@
  * Edge cases return `null` (no projection) rather than a misleading number:
  * no/zero cap, missing or invalid period bounds, end <= start, `now` outside the
  * period, negative usage, or less than MIN_ELAPSED_MS elapsed (too noisy).
- * Usage at or above the cap yields `capped`. Zero usage projects 0%.
+ * Usage at or above the cap yields `capped`. Usage from 99.9% up to the cap
+ * projects 100% at period end. Zero usage projects 0%.
  * Staleness is the caller's concern: stale data must not be projected.
  */
 export const MIN_ELAPSED_MS = 6 * 3_600_000;
@@ -32,6 +33,7 @@ export function projectMonthlyPace({ used, cap, periodStart, periodEnd, now }: N
   if (used >= cap) return { kind: "capped" };
   const elapsed = now - start;
   if (elapsed < MIN_ELAPSED_MS) return null;
+  if (used >= cap * 0.999) return { kind: "period-end-percent", percent: 100 };
   const rate = used / elapsed; // tokens per ms
   const capHit = rate > 0 ? start + cap / rate : Number.POSITIVE_INFINITY;
   if (capHit < end) return { kind: "cap-date", at: new Date(capHit).toISOString() };
