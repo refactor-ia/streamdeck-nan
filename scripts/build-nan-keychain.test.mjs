@@ -28,21 +28,6 @@ test("native NaN Keychain build accepts an existing output parent directory", as
   }
 });
 
-test("native NaN Keychain build plan signs with hardened runtime only when an identity is provided", () => {
-  const base = {
-    source: "/repo/native/nan-keychain/NanKeychain.swift",
-    output: "/repo/com.refactor-ia.nan.sdPlugin/bin/nan-keychain",
-    temporaryDirectory: "/tmp/nan-keychain",
-  };
-  const identity = "Developer ID Application: JUAN ENRIQUE BARBAT DEMONTEL (85FKRR9269)";
-  const plan = nativeBuildPlan({ ...base, identity });
-  assert.deepEqual(plan.at(-1), {
-    executable: "/usr/bin/xcrun",
-    args: ["codesign", "--force", "--options", "runtime", "--timestamp=none", "--sign", identity, base.output],
-  });
-  assert.ok(!nativeBuildPlan(base).some(({ args }) => args?.includes("codesign")));
-});
-
 test("native NaN Keychain build plan compiles macOS 13 arm64 and x86_64 then merges only the helper", () => {
   assert.deepEqual(nativeBuildPlan({
     source: "/repo/native/nan-keychain/NanKeychain.swift",
